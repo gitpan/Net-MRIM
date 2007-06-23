@@ -42,7 +42,7 @@ sub get_message {
 
 package Net::MRIM;
 
-my $VERSION="0.1";
+$VERSION='0.2';
 
 =pod
 
@@ -102,7 +102,7 @@ my $PROTO_VERSION	= 0x10009;
 my $MRIM_CS_HELLO 	= 0x1001;	## C->S, empty   
 my $MRIM_CS_HELLO_ACK 	= 0x1002;	## S->C, UL mrim_connection_params_t
 
-my $MRIM_CS_LOGIN2      = 0x1038;	## C->S, LPS login, LPS password, UL status, LPS uagent
+my $MRIM_CS_LOGIN2      = 0x1038;	## C->S, LPS login, LPS password, UL status, LPS useragent
 my $MRIM_CS_LOGIN_ACK 	= 0x1004;	## S->C, empty
 my $MRIM_CS_LOGIN_REJ 	= 0x1005;	## S->C, LPS reason
 
@@ -219,16 +219,16 @@ sub _make_mrim_packet {
 }
 
 sub _get_host_port {	
-	my $sock1 = new IO::Socket::INET (		
+	my $sock = new IO::Socket::INET (		
 			PeerAddr  => 'mrim.mail.ru',		
 			PeerPort  => 443,		
 			PeerProto => 'tcp', 		
 			TimeOut   => 10	);
-	my $answ="";
-	$sock1->recv($answ, 18);	
-	close $sock1;	
-	chomp $answ;
-   	return split /:/,  $answ;	
+	my $data="";
+	$sock->recv($data, 18);	
+	close $sock;	
+	chomp $data;
+   	return split /:/,  $data;	
 }
 
 sub _receive_data {
