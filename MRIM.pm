@@ -78,7 +78,7 @@ sub get_contacts {
 
 package Net::MRIM;
 
-$VERSION='0.3';
+$VERSION='0.4';
 
 =pod
 
@@ -185,7 +185,7 @@ use constant {
 
  MRIM_CS_CONTACT_LIST2	=> 0x1037, # S->C UL status, UL grp_nb, LPS grp_mask, LPS contacts_mask, grps, contacts
 
- MRIMUA => "Net::MRIM.pm v. $VERSION"
+ MRIMUA => "Net::MRIM.pm v. 0.4"
 };
 
 # the constructor takes only one optionnal parameter: debug (true or false);
@@ -240,9 +240,9 @@ sub ping {
 # this is to log in...
 sub login {
 	my ($self,$login,$pass)=@_;
-	my $status=$STATUS_ONLINE;
+	my $status=STATUS_ONLINE;
 	print "DEBUG [status]: $status\n" if ($self->{_debug});
-	my $data=_to_lps($login)._to_lps($pass).pack("V",$status)._to_lps($MRIMUA);
+	my $data=_to_lps($login)._to_lps($pass).pack("V",$status)._to_lps(MRIMUA);
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_LOGIN2,$data));
 	$self->{_seq_real}++;
 	$self->{_login}=$login;
@@ -350,7 +350,8 @@ sub _analyze_received_data {
 		$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_DELETE_OFFLINE_MESSAGE,substr($datarcv,0,8)));
 	} elsif ($msgrcv==MRIM_CS_MESSAGE_ACK) {
 		my @datas=_from_mrim_us("uuss",$datarcv);
-		if (($datas[1]==MESSAGE_FLAG_NORECV)||($datas[1]==MESSAGE_FLAG_RTF)) {
+		# below is a work-around: it seems that sometimes message_flag is left to 0...
+		if (($datas[1]==MESSAGE_FLAG_NORECV)||($datas[1]==MESSAGE_FLAG_RTF)||$datas[1]==0) {
 			$data->set_message($datas[2],$self->{_login},$datas[3]);
 		}
 	} elsif ($msgrcv==MRIM_CS_LOGOUT) {

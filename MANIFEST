@@ -4,4 +4,5 @@ Changes
 MANIFEST
 t/01.t
 examples/answeringmachine.pl
+examples/mrim.pl
 META.yml                                 Module meta-data (added by MakeMaker)
