@@ -78,7 +78,7 @@ sub get_contacts {
 
 package Net::MRIM;
 
-$VERSION='0.4';
+$VERSION='0.5';
 
 =pod
 
@@ -162,7 +162,7 @@ use constant {
 
  MRIM_CS_PING 	=> 0x1006,	## C->S, empty
 
- MRIM_CS_USER_STATUS	=> 0x100F,	## S->C, UL status, LPS user
+ MRIM_CS_USER_STATUS	=> 0x100f,	## S->C, UL status, LPS user
   STATUS_OFFLINE	 => 0x00000000,
   STATUS_ONLINE    => 0x00000001,
   STATUS_AWAY      => 0x00000002,
@@ -176,6 +176,7 @@ use constant {
   MESSAGE_FLAG_NORECV	=> 0x00000004,
   MESSAGE_FLAG_RTF		=> 0x00000080,
   MESSAGE_FLAG_NOTIFY	=> 0x00000400,
+ MRIM_CS_MESSAGE_RECV	=> 0x1011,
  MRIM_CS_MESSAGE_STATUS	=> 0x1012, # S->C
  MRIM_CS_MESSAGE_ACK			=> 0x1009, #S->C
  MRIM_CS_OFFLINE_MESSAGE_ACK	=> 0x101D, #S->C UIDL, LPS message
@@ -185,7 +186,7 @@ use constant {
 
  MRIM_CS_CONTACT_LIST2	=> 0x1037, # S->C UL status, UL grp_nb, LPS grp_mask, LPS contacts_mask, grps, contacts
 
- MRIMUA => "Net::MRIM.pm v. 0.4"
+ MRIMUA => "Net::MRIM.pm v. 0.5"
 };
 
 # the constructor takes only one optionnal parameter: debug (true or false);
@@ -204,6 +205,7 @@ sub new {
 	$self->{_sock}=$sock;
 	$self->{_seq_real}=0;
 	$self->{_ping_period}=30; # value by default
+	$self->{_contacts}={};
 	$self->{_debug}=$debug if ($debug==1);
 	bless $self;
 	return $self;
@@ -276,7 +278,6 @@ sub add_contact {
 	my ($self, $email, $name)=@_;
 	printf("DEBUG [add contact]: $email, $name\n",$msg) if ($self->{_debug});
 	my $data=pack("V",CONTACT_FLAG_VISIBLE).pack("V",2)._to_lps($email)._to_lps($name)._to_lps("")._to_lps("");
-	print "DEBUG $data\n";
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_ADD_CONTACT,$data));
 	$self->{_seq_real}++;
 	my ($msgrcv,$datarcv)=_receive_data($self);
@@ -351,8 +352,11 @@ sub _analyze_received_data {
 	} elsif ($msgrcv==MRIM_CS_MESSAGE_ACK) {
 		my @datas=_from_mrim_us("uuss",$datarcv);
 		# below is a work-around: it seems that sometimes message_flag is left to 0...
-		if (($datas[1]==MESSAGE_FLAG_NORECV)||($datas[1]==MESSAGE_FLAG_RTF)||$datas[1]==0) {
-			$data->set_message($datas[2],$self->{_login},$datas[3]);
+		if ($datas[1]==MESSAGE_FLAG_NORECV) {
+			$data->set_message($datas[2],$self->{_login},"".$datas[3]);
+		} elsif (($datas[1]==0)||($datas[1]==MESSAGE_FLAG_RTF)) {
+			$data->set_message($datas[2],$self->{_login},"".$datas[3]);
+			$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_MESSAGE_RECV,_to_lps($datas[2]).pack("V",$datas[0])));
 		}
 	} elsif ($msgrcv==MRIM_CS_LOGOUT) {
 		$data->set_logout_from_server();
@@ -371,14 +375,28 @@ sub _analyze_received_data {
 			print "DEBUG: Found group $grp_name of id $grp_id\n" if ($self->{_debug});
 			$groups->{$grp_id}=$grp_name;
 		}
-		my $contacts={};
+		my $contacts=$self->{_contacts};
 		while (length($datarcv)>1) {
 			# TODO works only with current pattern uussuus . if it changes, will break...
 			my ($flags,$group, $email, $name, $sflags, $status, $unk)=(0,"");
 			($flags,$group, $email, $name, $sflags, $status, $unk, $datarcv)=_from_mrim_us($ct_mask,$datarcv);
 			print "DEBUG: Found contact $name of id $email unknown: $unk\n" if ($self->{_debug});
-			$contacts->{$email}=$name;
+			$contacts->{$email}=$name if ($flags != STATUS_OFFLINE);
 		}
+		$self->{_contacts}=$contacts;
+		$self->{_groups}=$groups;
+		$data->set_contact_list($groups,$contacts);
+	} elsif ($msgrcv==MRIM_CS_USER_STATUS) {
+		my @datas=_from_mrim_us("us",$datarcv);
+		my $contacts=$self->{_contacts};
+		my $groups=$self->{_groups};
+		my @ckeys=keys%{$contacts};
+		if (($datas[0] != STATUS_OFFLINE)&&(!grep(/$datas[1]/,@ckeys))) {
+			$contacts->{$datas[1]}=$datas[1];
+		} elsif (($datas[0] == STATUS_OFFLINE)&&(grep(/$datas[1]/,@ckeys))) {
+			$contacts->{$datas[1]}=undef;
+		}
+		$self->{_contacts}=$contacts;
 		$data->set_contact_list($groups,$contacts);
 	} else {
 		$data->set_message("DEBUG",$self->{_login},$datarcv) if ($self->{_debug});
@@ -392,18 +410,23 @@ sub _from_mrim_us {
 	for (my $i=0;$i<length($pattern);$i++) {
 		my $datatype=substr($pattern,$i,1);
 		if ($datatype eq 'u') {
-			$data=~m/^(\C\C\C\C)(.*)/;
+			$data=~m/^(\C{4})(\C*)/;
 			my $item=unpack("V",$1);
 			$data=$2;
 			push @res,$item;
 		} elsif ($datatype eq 's') {
-			$data=~m/^(\C\C\C\C)(.*)/;
-			my $itemlength=unpack("V",$1);
-			$data=$2;
-			$data=~m/^(.{$itemlength})(.*)/;
-			my $item=$1;
-			$data=$2;
-			push @res,$item;
+			$data=~m/^(\C{4})(\C*)/s;
+			my $itemlength=$1;
+			if ($itemlength) {
+				$data=$2;
+				$itemlength=unpack("V",$1);
+				$data=~m/^(\C{$itemlength})(\C*)/;
+				my $item=$1;
+				$data=$2;
+				push @res,$item;
+			} else {
+				push @res, "";
+			}
 		}
 	}
 	push @res,$data;

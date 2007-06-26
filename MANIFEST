@@ -2,6 +2,7 @@ MRIM.pm
 Makefile.PL
 Changes
 MANIFEST
+Readme
 t/01.t
 examples/answeringmachine.pl
 examples/mrim.pl

@@ -16,11 +16,13 @@ $Term::ANSIColor::AUTORESET = 1;
 #
 
 my $LOGIN = "login\@mail.ru";
-my $PASSWORD = "password"; 
+my $PASSWORD = "password";
 
 #
 # the real stuff starts here...
 #
+
+$|=1;
 
 my $data : shared = "";
 my @dataout : shared = ();
@@ -30,7 +32,7 @@ my @clistitems : shared = ();
 my $thr = threads->new(\&mrim_conn);
 
 my $term = new Term::ReadLine 'MRIM';
-my $prompt = "MRIM > ";
+my $prompt : shared = "MRIM > ";
 
 my $input="";
 
@@ -48,7 +50,14 @@ while ($input=$term->readline($prompt)) {
 	elsif ($input =~ m/^s[0-9]+.*/) {
 		push @dataout,$input;
 		flush_data();
-	} 
+	} elsif ($input=~m/^add\s.*/) {
+		push @dataout,$input;
+		flush_data();
+	}
+	elsif ($input=~m/^auth\s.*/) {
+		push @dataout,$input;
+		flush_data();
+	}
 	elsif ($input eq "help") {
 		print <<EOF
 
@@ -74,8 +83,8 @@ print "Exiting...\n"; push @dataout,"quit"; $thr->join; exit;
 exit;
 
 sub flush_data {
-	print "\n".$data;
-	print "\n" if ($data ne "");
+	print RESET "\n".$data;
+	print UNDERLINE "\nMRIM > " if (length($data)>1);
 	$data="";
 }
 
@@ -101,19 +110,27 @@ sub mrim_conn {
 
 	while (1) {
 		my $command;
+		my $ret=undef;
 		foreach $command (@dataout) {
 			if ($command eq "quit") { $mrim->disconnect; exit; }
-			 elsif ($command =~ m/^s([0-9]+)\s(.*)/) {
+			elsif ($command =~ m/^s([0-9]+)\s(.*)/) {
 			 	my $contact=$clistkeys[$1-1];
 				my $data=$2;
-			 	$mrim->send_message($contact,$data);
-			 }
+			 	$ret=$mrim->send_message($contact,$data);
+			}
+			elsif ($command =~ m/^add\s(.*)/) {
+				$ret=$mrim->add_contact($1,$1);
+			}
+			elsif ($command =~ m/^auth\s(.*)/) {
+				$mrim->authorize_user($1);
+			}
 		}
 		@dataout=();
-		sleep(1);
-		my $ret=$mrim->ping();
+		#sleep(1);
+		$ret=$mrim->ping() if (!defined($ret));
 		if ($ret->is_message()) {
 			$data.="".$ret->get_from()." > ".$ret->get_message()."\n";
+			flush_data();
 		} elsif ($ret->is_contact_list()) {
 			my $clist=$ret->get_contacts();
 	                my $clitem;
