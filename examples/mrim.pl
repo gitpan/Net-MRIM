@@ -53,6 +53,9 @@ while ($input=$term->readline($prompt)) {
 	} elsif ($input=~m/^add\s.*/) {
 		push @dataout,$input;
 		flush_data();
+	} elsif ($input=~m/^del\s.*/) {
+		push @dataout,$input;
+		flush_data();
 	}
 	elsif ($input=~m/^auth\s.*/) {
 		push @dataout,$input;
@@ -68,6 +71,8 @@ quit         - exits MRIM
 sh           - show historized messages waiting
 cl           - show contact list
 s<num> <msg> - send <msg> to contact number <num> in the contact list
+add <email>  - add an user to the contact list
+del <email>  - remove an user from the contact list
 
 EOF
 	}
@@ -119,7 +124,10 @@ sub mrim_conn {
 			 	$ret=$mrim->send_message($contact,$data);
 			}
 			elsif ($command =~ m/^add\s(.*)/) {
-				$ret=$mrim->add_contact($1,$1);
+				$ret=$mrim->add_contact($1);
+			}
+			elsif ($command =~ m/^del\s(.*)/) {
+				$ret=$mrim->remove_contact($1);
 			}
 			elsif ($command =~ m/^auth\s(.*)/) {
 				$mrim->authorize_user($1);
@@ -137,9 +145,14 @@ sub mrim_conn {
 			@clistkeys=();
 			@clistitems=();
 	                foreach $clitem (keys(%{$clist})) {
-	                        push @clistkeys,$clitem;
-				push @clistitems, $clist->{$clitem};
+				if (defined($clist->{$clitem})) {
+		                        push @clistkeys,$clitem;
+					push @clistitems, $clist->{$clitem};
+				}
 	                }											 
+		} elsif ($ret->is_logout_from_server()) {
+			print "LOGGED OUT FROM SERVER\n";
+			exit;
 		}
 	}
 

@@ -78,7 +78,7 @@ sub get_contacts {
 
 package Net::MRIM;
 
-$VERSION='0.5';
+$VERSION='0.6';
 
 =pod
 
@@ -150,7 +150,7 @@ use IO::Select;
 # the definitions below come straight from the protocol documentation
 use constant {
  CS_MAGIC		=> 0xDEADBEEF,
- PROTO_VERSION	=> 0x10009,
+ PROTO_VERSION	=> 0x10008,
 
  MRIM_CS_HELLO 	=> 0x1001,	## C->S, empty   
  MRIM_CS_HELLO_ACK 	=> 0x1002,	## S->C, UL mrim_connection_params_t
@@ -166,14 +166,20 @@ use constant {
   STATUS_OFFLINE	 => 0x00000000,
   STATUS_ONLINE    => 0x00000001,
   STATUS_AWAY      => 0x00000002,
+  STATUS_UNDETERMINED   => 0x00000003,
 
  MRIM_CS_ADD_CONTACT 	=> 0x1019,  # C->S UL flag, UL group_id, LPS email, LPS name
   CONTACT_FLAG_VISIBLE	=> 0x00000008,
+  CONTACT_FLAG_REMOVED	=> 0x00000001,
+ MRIM_CS_ADD_CONTACT_ACK	=> 0x101A,
  MRIM_CS_AUTHORIZE		=> 0x1020,	# C -> S, LPS user
+ MRIM_CS_MODIFY_CONTACT		=> 0x101B,	# C -> S, UL id, UL flags, UL group_id, LPS email, LPS name, LPS unused
+ MRIM_CS_MODIFY_CONTACT_ACK	=> 0x101C,
  MRIM_CS_AUTHORIZE_ACK	=> 0x1021,	# C -> S, LPS user
-	
+
  MRIM_CS_MESSAGE 		=> 0x1008,	## C->S, UL flags, LPS to, LPS message, LPS rtf-message
   MESSAGE_FLAG_NORECV	=> 0x00000004,
+  MESSAGE_FLAG_AUTHORIZE	=> 0x00000008,
   MESSAGE_FLAG_RTF		=> 0x00000080,
   MESSAGE_FLAG_NOTIFY	=> 0x00000400,
  MRIM_CS_MESSAGE_RECV	=> 0x1011,
@@ -186,7 +192,7 @@ use constant {
 
  MRIM_CS_CONTACT_LIST2	=> 0x1037, # S->C UL status, UL grp_nb, LPS grp_mask, LPS contacts_mask, grps, contacts
 
- MRIMUA => "Net::MRIM.pm v. 0.5"
+ MRIMUA => "Net::MRIM.pm v. 0.6"
 };
 
 # the constructor takes only one optionnal parameter: debug (true or false);
@@ -206,6 +212,7 @@ sub new {
 	$self->{_seq_real}=0;
 	$self->{_ping_period}=30; # value by default
 	$self->{_contacts}={};
+	$self->{_all_contacts}={};
 	$self->{_debug}=$debug if ($debug==1);
 	bless $self;
 	return $self;
@@ -272,16 +279,39 @@ sub authorize_user {
 }
 
 # to add a contact to the contact list
-# this is still pre-alpha, and there seems to be a mistake in Mail.Ru protocol doc
-# as the format of the query is uussss instead of uusss
 sub add_contact {
-	my ($self, $email, $name)=@_;
-	printf("DEBUG [add contact]: $email, $name\n",$msg) if ($self->{_debug});
-	my $data=pack("V",CONTACT_FLAG_VISIBLE).pack("V",2)._to_lps($email)._to_lps($name)._to_lps("")._to_lps("");
+	my ($self, $email)=@_;
+	printf("DEBUG [add contact]: $email\n",$msg) if ($self->{_debug});
+	my $data=pack("V",0).pack("V",0xffffffff)._to_lps($email).pack("V",0).pack("V",0);
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_ADD_CONTACT,$data));
+	$self->{_seq_real}++;
+	# not in the protocol: after sending an auth request, one should send an auth message !
+	$data=pack("V",MESSAGE_FLAG_AUTHORIZE)._to_lps($email)._to_lps("Authorize")._to_lps("");
+	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_MESSAGE,$data));
 	$self->{_seq_real}++;
 	my ($msgrcv,$datarcv)=_receive_data($self);
 	return _analyze_received_data($self,$msgrcv,$datarcv);	
+}
+
+# to remove a contact from the contact list
+sub remove_contact {
+	my ($self, $email)=@_;
+	print "DEBUG [remove contact]: $email".$self->{_all_contacts}->{$email}."\n" if ($self->{_debug});
+	return new Net::MRIM::Message if (!defined($self->{_all_contacts}->{$email}));
+	# C -> S, UL id, UL flags, UL group_id, LPS email, LPS name, LPS unused
+	my $data=pack("V",$self->{_all_contacts}->{$email}).pack("V",CONTACT_FLAG_REMOVED).pack("V",0xffffffff)._to_lps("paris_french\@mail.ru").pack("V",0).pack("V",0);
+	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_MODIFY_CONTACT,$data));
+	$self->{_seq_real}++;
+	my ($msgrcv,$datarcv)=_receive_data($self);
+	if ($msgrcv==MRIM_CS_MODIFY_CONTACT_ACK) {
+		my @datas=_from_mrim_us("uu",$datarcv.pack("V",0));
+		if ($datas[0]==0) {
+			print "DEBUG $email removed from CL\n" if ($self->{_debug});
+			$self->{_contacts}->{$email}=undef;
+			$self->{_all_contacts}->{$email}=undef;
+		}
+	}
+	return _analyze_received_data($self,$msgrcv,$datarcv);
 }
 
 # and finally to disconnect
@@ -327,6 +357,7 @@ sub _receive_data {
 	my $data="";
 	my $typ=0;
 	printf("DEBUG [recv packet]: waiting for header data\n",$msg) if ($self->{_debug});
+	return (MRIM_CS_LOGOUT,"") if (!($self->{_sock}));
 	my $s = IO::Select->new();
 	$s->add($self->{_sock});
 	# this stuff is to not wait for ever data from the server
@@ -376,28 +407,45 @@ sub _analyze_received_data {
 			$groups->{$grp_id}=$grp_name;
 		}
 		my $contacts=$self->{_contacts};
+		my $all_contacts=$self->{_all_contacts};
+		my $i=scalar(keys(%{$all_contacts}))+1;
+		$i=20 if ($i<10);
 		while (length($datarcv)>1) {
 			# TODO works only with current pattern uussuus . if it changes, will break...
 			my ($flags,$group, $email, $name, $sflags, $status, $unk)=(0,"");
 			($flags,$group, $email, $name, $sflags, $status, $unk, $datarcv)=_from_mrim_us($ct_mask,$datarcv);
-			print "DEBUG: Found contact $name of id $email unknown: $unk\n" if ($self->{_debug});
-			$contacts->{$email}=$name if ($flags != STATUS_OFFLINE);
+			print "DEBUG: Found contact $name of id $email flags $flags $sflags $status $group unknown: $unk\n" if ($self->{_debug});
+			$name=$email if (length($name)<1);
+			$contacts->{$email}=$name if (($status != STATUS_OFFLINE)&&($status != STATUS_UNDETERMINED));
+			$all_contacts->{$email}=$i;
+			$i++;
 		}
 		$self->{_contacts}=$contacts;
+		$self->{_all_contacts}=$all_contacts;
 		$self->{_groups}=$groups;
 		$data->set_contact_list($groups,$contacts);
 	} elsif ($msgrcv==MRIM_CS_USER_STATUS) {
 		my @datas=_from_mrim_us("us",$datarcv);
 		my $contacts=$self->{_contacts};
+		my $all_contacts=$self->{_all_contacts};
 		my $groups=$self->{_groups};
 		my @ckeys=keys%{$contacts};
-		if (($datas[0] != STATUS_OFFLINE)&&(!grep(/$datas[1]/,@ckeys))) {
+		my $i=scalar(keys(%{$all_contacts}))+1;
+		$i=20 if ($i<10);
+		if (($datas[0] != STATUS_OFFLINE)&&($datas[0] != STATUS_UNDETERMINED)) {
 			$contacts->{$datas[1]}=$datas[1];
+			$all_contacts->{$datas[1]}=$i;
 		} elsif (($datas[0] == STATUS_OFFLINE)&&(grep(/$datas[1]/,@ckeys))) {
 			$contacts->{$datas[1]}=undef;
+			$all_contacts->{$datas[1]}=undef;
 		}
 		$self->{_contacts}=$contacts;
+		$self->{_all_contacts}=$all_contacts;
 		$data->set_contact_list($groups,$contacts);
+	} elsif (($msgrcv==MRIM_CS_ADD_CONTACT_ACK)||($msgrcv==MRIM_CS_MODIFY_CONTACT_ACK)) {
+		my @datas=_from_mrim_us("uu",$datarcv.pack("V",0));
+		print "DEBUG add_contact_ack: $datas[0] $datas[1]\n" if ($self->{_debug});
+		$data->set_contact_list($self->{_groups},$self->{_contacts});
 	} else {
 		$data->set_message("DEBUG",$self->{_login},$datarcv) if ($self->{_debug});
 	}
@@ -433,7 +481,7 @@ sub _from_mrim_us {
 	return @res;
 }
 
-# convert to LPV (read the protocol !)
+# convert to LPS (read the protocol !)
 sub _to_lps {
 	my ($str)=@_;
 	return pack("V",length($str)).$str;
