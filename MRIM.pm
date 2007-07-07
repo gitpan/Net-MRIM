@@ -78,7 +78,7 @@ sub get_contacts {
 
 package Net::MRIM;
 
-$VERSION='0.6';
+$VERSION='0.7';
 
 =pod
 
@@ -106,9 +106,17 @@ To log in:
 	print "LOGGED IN\n";
  }
 
-To add a user:
+To authorize a user:
 
  $mrim->authorize_user("friend\@mail.ru");
+
+To add a user to contact list (sends automatically auth request):
+
+ $mrim->add_contact("friend\@mail.ru");
+
+To remove a user from contact list:
+
+ $mrim->remove_contact("friend\@mail.ru");
 
 To send a message:
 
@@ -192,8 +200,11 @@ use constant {
 
  MRIM_CS_CONTACT_LIST2	=> 0x1037, # S->C UL status, UL grp_nb, LPS grp_mask, LPS contacts_mask, grps, contacts
 
- MRIMUA => "Net::MRIM.pm v. 0.6"
+ MRIMUA => "Net::MRIM.pm v. 0.7"
 };
+
+use bytes;
+
 
 # the constructor takes only one optionnal parameter: debug (true or false);
 sub new {
@@ -203,7 +214,8 @@ sub new {
                 PeerAddr		=> $host,
                 PeerPort		=> $port,
                 Proto			=> 'tcp',
-				TimeOut			=> 10
+                Type			=> SOCK_STREAM,
+				TimeOut			=> 20
 			);
 	die "couldn't connect" if (!defined($sock));
 	print "DEBUG Connected to $host:$port\n" if ($debug==1);
@@ -211,7 +223,9 @@ sub new {
 	$self->{_sock}=$sock;
 	$self->{_seq_real}=0;
 	$self->{_ping_period}=30; # value by default
+	# this stores the contact list:
 	$self->{_contacts}={};
+	# this stores the MRIM's UIDs for contacts (internal use only)
 	$self->{_all_contacts}={};
 	$self->{_debug}=$debug if ($debug==1);
 	bless $self;
@@ -223,7 +237,7 @@ sub new {
 sub hello {
 	my ($self)=@_;
 	my $ret=$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_HELLO,""),0);
-	my($msgrcv,$datarcv)=_receive_data($self);
+	my($msgrcv,$datarcv,$dlen)=_receive_data($self);
 	$datarcv=unpack("V",$datarcv);
 	$self->{_ping_period} = $datarcv;
 	$self->{_seq_real}++;
@@ -242,8 +256,8 @@ sub ping {
 	print "DEBUG [ping]\n" if ($self->{_debug});
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_PING,""),0);	
 	$self->{_seq_real}++;
-	my ($msgrcv,$datarcv)=_receive_data($self);
-	return _analyze_received_data($self,$msgrcv,$datarcv);
+	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
+	return _analyze_received_data($self,$msgrcv,$datarcv,$dlen);
 }
 
 # this is to log in...
@@ -255,7 +269,7 @@ sub login {
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_LOGIN2,$data));
 	$self->{_seq_real}++;
 	$self->{_login}=$login;
-	my($msgrcv,$datarcv)=_receive_data($self);
+	my($msgrcv,$datarcv,$dlen)=_receive_data($self);
 	return ($msgrcv==MRIM_CS_LOGIN_ACK)?1:0;
 }
 
@@ -266,8 +280,8 @@ sub send_message {
 	my $data=pack("V",MESSAGE_FLAG_NORECV)._to_lps($to)._to_lps($message)._to_lps("");
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_MESSAGE,$data));
 	$self->{_seq_real}++;
-	my ($msgrcv,$datarcv)=_receive_data($self);
-	return _analyze_received_data($self,$msgrcv,$datarcv);
+	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
+	return _analyze_received_data($self,$msgrcv,$datarcv,$dlen);
 }
 
 # to authorize a user to add us to the contact list
@@ -289,8 +303,8 @@ sub add_contact {
 	$data=pack("V",MESSAGE_FLAG_AUTHORIZE)._to_lps($email)._to_lps("Authorize")._to_lps("");
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_MESSAGE,$data));
 	$self->{_seq_real}++;
-	my ($msgrcv,$datarcv)=_receive_data($self);
-	return _analyze_received_data($self,$msgrcv,$datarcv);	
+	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
+	return _analyze_received_data($self,$msgrcv,$datarcv,$dlen);	
 }
 
 # to remove a contact from the contact list
@@ -302,7 +316,7 @@ sub remove_contact {
 	my $data=pack("V",$self->{_all_contacts}->{$email}).pack("V",CONTACT_FLAG_REMOVED).pack("V",0xffffffff)._to_lps("paris_french\@mail.ru").pack("V",0).pack("V",0);
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_MODIFY_CONTACT,$data));
 	$self->{_seq_real}++;
-	my ($msgrcv,$datarcv)=_receive_data($self);
+	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
 	if ($msgrcv==MRIM_CS_MODIFY_CONTACT_ACK) {
 		my @datas=_from_mrim_us("uu",$datarcv.pack("V",0));
 		if ($datas[0]==0) {
@@ -311,7 +325,7 @@ sub remove_contact {
 			$self->{_all_contacts}->{$email}=undef;
 		}
 	}
-	return _analyze_received_data($self,$msgrcv,$datarcv);
+	return _analyze_received_data($self,$msgrcv,$datarcv,$dlen);
 }
 
 # and finally to disconnect
@@ -360,24 +374,35 @@ sub _receive_data {
 	return (MRIM_CS_LOGOUT,"") if (!($self->{_sock}));
 	my $s = IO::Select->new();
 	$s->add($self->{_sock});
+	my $dllen=0;
 	# this stuff is to not wait for ever data from the server
 	# note that we're mixing a bit unbuffered and buffered I/O, this is not 100% great	
 	if ($s->can_read(int($self->{_ping_period}/5))) {
 		$self->{_sock}->recv($buffer,44);
 		my ($magic, $proto, $seq, $msg, $dlen, $from, $fromport, $r1, $r2, $r3, $r4) = unpack ("V11", $buffer);
+		use bytes;
 		$self->{_sock}->recv($buffer,$dlen);
 		$data=$buffer;
 		$typ=$msg;
-		printf("DEBUG [recv packet]: MAGIC=$magic, PROTO=$proto, SEQ=$seq, TYP=0x%04x, LEN=$dlen\n",$msg) if ($self->{_debug});
+		$dllen=$dlen;
+		# unfortunately "buffer I/O" isn't that buffered... 
+		while (length($data)<$dlen) {
+			$self->{_sock}->recv($buffer,$dlen-length($data));
+			$data.=$buffer;
+		}
+		printf("DEBUG [recv packet]: MAGIC=$magic, PROTO=$proto, SEQ=$seq, TYP=0x%04x, LEN=$dlen ".length($buffer)."\n",$msg) if ($self->{_debug});
 	}
-	return ($typ,$data);	
+	return ($typ,$data,$dllen);	
 }
 
 # the packet analyzer
 sub _analyze_received_data {
-	my ($self,$msgrcv,$datarcv)=@_;
+	my ($self,$msgrcv,$datarcv,$dlen)=@_;
+	$dlen = 0 if (!defined($dlen));
 	my $data=new Net::MRIM::Message();
-	if ($msgrcv==MRIM_CS_OFFLINE_MESSAGE_ACK) {
+	if (!defined($msgrcv)) {
+		$data->set_logout_from_server();
+	} elsif ($msgrcv==MRIM_CS_OFFLINE_MESSAGE_ACK) {
 		$data->set_message("OFFLINE",$self->{_login},substr($datarcv,8,-1));
 		$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_DELETE_OFFLINE_MESSAGE,substr($datarcv,0,8)));
 	} elsif ($msgrcv==MRIM_CS_MESSAGE_ACK) {
@@ -410,14 +435,19 @@ sub _analyze_received_data {
 		my $all_contacts=$self->{_all_contacts};
 		my $i=scalar(keys(%{$all_contacts}))+1;
 		$i=20 if ($i<10);
-		while (length($datarcv)>1) {
+		my $clen=8+length($gr_mask)+length($ct_mask);
+		while ((length($datarcv)>1)||($clen < $dlen)) {
 			# TODO works only with current pattern uussuus . if it changes, will break...
 			my ($flags,$group, $email, $name, $sflags, $status, $unk)=(0,"");
 			($flags,$group, $email, $name, $sflags, $status, $unk, $datarcv)=_from_mrim_us($ct_mask,$datarcv);
-			print "DEBUG: Found contact $name of id $email flags $flags $sflags $status $group unknown: $unk\n" if ($self->{_debug});
+			$name=~s/\n//g;
+			print "DEBUG: Found contact $name of id $email flags $flags $sflags $status $group unknown: $unk clen $clen dlen $dlen\n" if ($self->{_debug});
 			$name=$email if (length($name)<1);
-			$contacts->{$email}=$name if (($status != STATUS_OFFLINE)&&($status != STATUS_UNDETERMINED));
+			# TODO: create a MRIM::Contact object, and implement the CList as a list of MRIM::Contact
+			$contacts->{$email}=$name if (($status != STATUS_OFFLINE)&&($status != STATUS_UNDETERMINED)&&(length($email)>1));
 			$all_contacts->{$email}=$i;
+			$clen=16+length($name)+length($email)+length($unk)+$clen;
+			$datarcv="" if($clen>$dlen);
 			$i++;
 		}
 		$self->{_contacts}=$contacts;
@@ -452,26 +482,35 @@ sub _analyze_received_data {
 	return $data;
 }
 
+# this is to decode mrim's combination of ulong and lps that is sent as message data
 sub _from_mrim_us {
 	my ($pattern,$data)=@_;
 	my @res=();
 	for (my $i=0;$i<length($pattern);$i++) {
 		my $datatype=substr($pattern,$i,1);
 		if ($datatype eq 'u') {
-			$data=~m/^(\C{4})(\C*)/;
-			my $item=unpack("V",$1);
-			$data=$2;
-			push @res,$item;
+			if ( $data=~m/^(\C{4})(\C*)/) {
+				my $item=unpack("V",$1);
+				$data=$2;
+				push @res,$item;
+			} else {
+				push @res,0;
+			}
 		} elsif ($datatype eq 's') {
 			$data=~m/^(\C{4})(\C*)/s;
 			my $itemlength=$1;
 			if ($itemlength) {
 				$data=$2;
-				$itemlength=unpack("V",$1);
-				$data=~m/^(\C{$itemlength})(\C*)/;
-				my $item=$1;
-				$data=$2;
-				push @res,$item;
+				$itemlength=unpack("V",$itemlength);
+				if ($itemlength<4096) {
+					$data=~m/^(\C{$itemlength})(\C*)/;
+					my $item=$1;
+					$data=$2;
+					push @res,$item;
+				} else {
+					$data=~s/^\0//;
+					push @res, "";
+				}
 			} else {
 				push @res, "";
 			}
