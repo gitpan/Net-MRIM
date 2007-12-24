@@ -42,12 +42,16 @@ while ($input=$term->readline($prompt)) {
 	elsif ($input eq "cl") {
 		print BOLD "\n## Contact List ##\n";
 		for (my $i=0; $i<scalar(@clistkeys); $i++) {
-			print "".($i+1)." : ".$clistkeys[$i]." (".$clistitems[$i].")\n";
+			my $clitem=$clistkeys[$i];
+			print "".($i+1)." : ".$clistkeys[$i]." (".$clistitems[$i].")\n" if ($clitem ne 'x');
 		}
 		print "##\n";
 		flush_data();
 	}
 	elsif ($input =~ m/^s[0-9]+.*/) {
+		push @dataout,$input;
+		flush_data();
+	} elsif ($input =~ m/^i[0-9]+/) {
 		push @dataout,$input;
 		flush_data();
 	} elsif ($input=~m/^add\s.*/) {
@@ -87,9 +91,14 @@ print "Exiting...\n"; push @dataout,"quit"; $thr->join; exit;
 
 exit;
 
+sub print_data {
+	my ($mydata)=@_;
+	print RESET "\n".$mydata;
+	print UNDERLINE "\nMRIM > " if (length($mydata)>1);
+}
+
 sub flush_data {
-	print RESET "\n".$data;
-	print UNDERLINE "\nMRIM > " if (length($data)>1);
+	print_data($data);
 	$data="";
 }
 
@@ -102,7 +111,10 @@ sub cleanup_exit {
 	exit;
 }
 
-
+sub my_local_time {
+	my @ltime=localtime();
+	return sprintf("%02d",$ltime[2]).':'.sprintf("%02d",$ltime[1]);
+}
 
 sub mrim_conn {
 
@@ -121,7 +133,16 @@ sub mrim_conn {
 			elsif ($command =~ m/^s([0-9]+)\s(.*)/) {
 			 	my $contact=$clistkeys[$1-1];
 				my $data=$2;
-			 	$ret=$mrim->send_message($contact,$data);
+				if ($contact ne 'x') {
+					$ret=$mrim->send_message($contact,$data);
+					print_data(my_local_time()." > ".$data." (to $contact)\n");
+				} else {
+					print_data(my_local_time()." > ".$data." (discarded, $contact offline)\n");
+				}
+			}
+			elsif ($command =~ m/^i([0-9]+)/) {
+				my $contact=$clistkeys[$1-1];
+				$ret=$mrim->contact_info($contact) if ($contact ne 'x');
 			}
 			elsif ($command =~ m/^add\s(.*)/) {
 				$ret=$mrim->add_contact($1);
@@ -137,19 +158,33 @@ sub mrim_conn {
 		#sleep(1);
 		$ret=$mrim->ping() if (!defined($ret));
 		if ($ret->is_message()) {
-			$data.="".$ret->get_from()." > ".$ret->get_message()."\n";
+			$data.=my_local_time()." ".$ret->get_from()." > ".$ret->get_message()."\n";
 			flush_data();
 		} elsif ($ret->is_contact_list()) {
 			my $clist=$ret->get_contacts();
 	                my $clitem;
-			@clistkeys=();
-			@clistitems=();
+			my @nclistkeys=();
+			my @nclistitems=();
 	                foreach $clitem (keys(%{$clist})) {
 				if (defined($clist->{$clitem})) {
-		                        push @clistkeys,$clitem;
-					push @clistitems, $clist->{$clitem};
+		                        push @nclistkeys,$clitem;
+		                        push @nclistitems,$clist->{$clitem};
+					if(_is_in_list($clitem,@clistkeys)==0) {
+						push @clistkeys,$clitem;
+						push @clistitems, $clist->{$clitem};
+						#$data.="adding $clitem ". $clist->{$clitem}." to CL ".scalar(@clistkeys)." ".scalar( @clistitems)."\n";
+					}
 				}
-	                }											 
+	                }
+			my $icl;
+			for ($icl=0;$icl<scalar(@clistkeys);$icl++) {
+				$clitem=$clistkeys[$icl];
+				if (_is_in_list($clitem,@nclistkeys)==0) {
+					$data.=my_local_time().': '.$clitem." disconnected.\n" if ($clitem ne 'x');
+					$clistkeys[$icl]='x';
+				}
+			}
+			flush_data() if ($data ne '');
 		} elsif ($ret->is_logout_from_server()) {
 			print "LOGGED OUT FROM SERVER\n";
 			exit;
@@ -157,3 +192,11 @@ sub mrim_conn {
 	}
 
 }
+
+sub _is_in_list {
+	my ($item,@list)=@_;
+	foreach (@list) {
+		return 1 if ($_ eq $item);
+	}
+	return 0;
+} 

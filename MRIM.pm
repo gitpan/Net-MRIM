@@ -78,7 +78,7 @@ sub get_contacts {
 
 package Net::MRIM;
 
-$VERSION='0.7';
+$VERSION='0.8';
 
 =pod
 
@@ -197,10 +197,13 @@ use constant {
  MRIM_CS_DELETE_OFFLINE_MESSAGE	=> 0x101E, #C->S UIDL
 
  MRIM_CS_CONNECTION_PARAMS =>0x1014, # S->C 
+ 
+ MRIM_CS_ANKETA_INFO =>0x1028, # S->C
+ MRIM_CS_WP_REQUEST =>0x1029, # C->S
 
  MRIM_CS_CONTACT_LIST2	=> 0x1037, # S->C UL status, UL grp_nb, LPS grp_mask, LPS contacts_mask, grps, contacts
 
- MRIMUA => "Net::MRIM.pm v. 0.7"
+ MRIMUA => "Net::MRIM.pm v. 0.8"
 };
 
 use bytes;
@@ -328,6 +331,18 @@ sub remove_contact {
 	return _analyze_received_data($self,$msgrcv,$datarcv,$dlen);
 }
 
+sub contact_info {
+	my ($self, $email)=@_;
+	$email=~m/^([a-z0-9\_\-\.]+)\@([a-z0-9\_\-\.]+)$/i;
+	my $cuser=$1;
+	my $cdomain=$2;
+	my $data=pack("V",0x00000000)._to_lps($cuser).pack("V",0x00000001)._to_lps($cdomain);
+	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_WP_REQUEST,$data));
+	$self->{_seq_real}++;
+	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
+	return _analyze_received_data($self,$msgrcv,$datarcv,$dlen);
+}
+
 # and finally to disconnect
 sub disconnect {
 	my ($self)=@_;
@@ -390,7 +405,7 @@ sub _receive_data {
 			$self->{_sock}->recv($buffer,$dlen-length($data));
 			$data.=$buffer;
 		}
-		printf("DEBUG [recv packet]: MAGIC=$magic, PROTO=$proto, SEQ=$seq, TYP=0x%04x, LEN=$dlen ".length($buffer)."\n",$msg) if ($self->{_debug});
+		printf("DEBUG [recv packet]: MAGIC=$magic, PROTO=$proto, SEQ=$seq, TYP=0x%04x, LEN=$dlen ".length($data)."\n",$msg) if ($self->{_debug});
 	}
 	return ($typ,$data,$dllen);	
 }
@@ -476,6 +491,30 @@ sub _analyze_received_data {
 		my @datas=_from_mrim_us("uu",$datarcv.pack("V",0));
 		print "DEBUG add_contact_ack: $datas[0] $datas[1]\n" if ($self->{_debug});
 		$data->set_contact_list($self->{_groups},$self->{_contacts});
+	} elsif ($msgrcv==MRIM_CS_ANKETA_INFO) {
+		my @datas=_from_mrim_us("uuuusssssssssssssssssssssssss",$datarcv);
+		my $fulldata="INFO\n";
+		for (my $i=4;$i<10;$i++) {
+			my $label=$datas[$i];
+			my $value=$datas[$i+15];
+			if ($label eq 'Username') {
+				$fulldata.="User\t\t: $value\@";
+			} elsif ($label eq 'Domain') {
+				$fulldata.=$value."\n";
+			} elsif ($label eq 'Sex') {
+				if ($value eq '1') {
+					$value='Male';
+				} elsif ($value eq '2') {
+					$value='Female';
+				} else {
+					$value='Unknown';
+				}
+				$fulldata.=$label."\t\t: ".$value."\n";
+			} else {			
+				$fulldata.=$label."\t: ".$value."\n";
+			}
+		}
+		$data->set_message("SERVER",$self->{_login},$fulldata);
 	} else {
 		$data->set_message("DEBUG",$self->{_login},$datarcv) if ($self->{_debug});
 	}
