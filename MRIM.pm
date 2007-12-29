@@ -78,7 +78,7 @@ sub get_contacts {
 
 package Net::MRIM;
 
-$VERSION='0.8';
+$VERSION='0.9';
 
 =pod
 
@@ -203,7 +203,7 @@ use constant {
 
  MRIM_CS_CONTACT_LIST2	=> 0x1037, # S->C UL status, UL grp_nb, LPS grp_mask, LPS contacts_mask, grps, contacts
 
- MRIMUA => "Net::MRIM.pm v. 0.8"
+ MRIMUA => "Net::MRIM.pm v. 0.9"
 };
 
 use bytes;
@@ -313,10 +313,10 @@ sub add_contact {
 # to remove a contact from the contact list
 sub remove_contact {
 	my ($self, $email)=@_;
-	print "DEBUG [remove contact]: $email".$self->{_all_contacts}->{$email}."\n" if ($self->{_debug});
+	print "DEBUG [remove contact]: $email ".$self->{_all_contacts}->{$email}."\n" if ($self->{_debug});
 	return new Net::MRIM::Message if (!defined($self->{_all_contacts}->{$email}));
 	# C -> S, UL id, UL flags, UL group_id, LPS email, LPS name, LPS unused
-	my $data=pack("V",$self->{_all_contacts}->{$email}).pack("V",CONTACT_FLAG_REMOVED).pack("V",0xffffffff)._to_lps("paris_french\@mail.ru").pack("V",0).pack("V",0);
+	my $data=pack("V",$self->{_all_contacts}->{$email}).pack("V",CONTACT_FLAG_REMOVED).pack("V",0xffffffff)._to_lps($email).pack("V",0).pack("V",0);
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_MODIFY_CONTACT,$data));
 	$self->{_seq_real}++;
 	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
@@ -331,6 +331,7 @@ sub remove_contact {
 	return _analyze_received_data($self,$msgrcv,$datarcv,$dlen);
 }
 
+# get contact info from server (send contact info request)
 sub contact_info {
 	my ($self, $email)=@_;
 	$email=~m/^([a-z0-9\_\-\.]+)\@([a-z0-9\_\-\.]+)$/i;

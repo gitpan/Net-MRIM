@@ -75,8 +75,10 @@ quit         - exits MRIM
 sh           - show historized messages waiting
 cl           - show contact list
 s<num> <msg> - send <msg> to contact number <num> in the contact list
+i<num>       - request information for contact number <num>
 add <email>  - add an user to the contact list
 del <email>  - remove an user from the contact list
+auth <email> - authorize user
 
 EOF
 	}
