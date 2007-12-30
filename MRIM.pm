@@ -1,8 +1,11 @@
+use 5.008;
+use strict;
+
 # below is just an utility class
 package Net::MRIM::Message;
 
 use constant {
- TYPE_UNKOWN	=> 0,
+ TYPE_UNKNOWN	=> 0,
  TYPE_MSG		=> 1,
  TYPE_LOGOUT_FROM_SRV	=> 2,
  TYPE_CONTACT_LIST	=> 3
@@ -11,7 +14,7 @@ use constant {
 sub new {
 	my ($pkgname)=@_;
 	my $self={}; 
-	$self->{_type}=TYPE_UNKOWN;
+	$self->{_type}=TYPE_UNKNOWN;
 	bless $self;
 	return $self;
 }
@@ -78,7 +81,7 @@ sub get_contacts {
 
 package Net::MRIM;
 
-$VERSION='0.9';
+our $VERSION='0.10';
 
 =pod
 
@@ -94,7 +97,10 @@ This is a Perl implementation of the mail.ru agent protocol, which specs can be 
 
 To construct and connect to MRIM's servers:
 
- my $mrim=Net::MRIM->new(0);
+ my $mrim=Net::MRIM->new(
+ 			Debug=>0,
+ 			PollFrequency=>5
+ 			);
  $mrim->hello();
 
 To log in:
@@ -121,6 +127,10 @@ To remove a user from contact list:
 To send a message:
 
  my $ret=$mrim->send_message("friend\@mail.ru","hello");
+
+Get information for a contact:
+
+ my $ret=$mrim->contact_info("friend\@mail.ru");
 
 Analyze the return of the message:
 
@@ -203,25 +213,24 @@ use constant {
 
  MRIM_CS_CONTACT_LIST2	=> 0x1037, # S->C UL status, UL grp_nb, LPS grp_mask, LPS contacts_mask, grps, contacts
 
- MRIMUA => "Net::MRIM.pm v. 0.9"
+ MRIMUA => "Net::MRIM.pm v. "
 };
 
 use bytes;
 
-
 # the constructor takes only one optionnal parameter: debug (true or false);
 sub new {
-	my ($pkgname,$debug)=@_;
+	my ($pkgname,%params)=@_;
 	my ($host, $port) = _get_host_port();
 	my $sock = IO::Socket::INET->new(
-                PeerAddr		=> $host,
-                PeerPort		=> $port,
-                Proto			=> 'tcp',
-                Type			=> SOCK_STREAM,
+				PeerAddr		=> $host,
+				PeerPort		=> $port,
+				Proto			=> 'tcp',
+				Type			=> SOCK_STREAM,
 				TimeOut			=> 20
 			);
 	die "couldn't connect" if (!defined($sock));
-	print "DEBUG Connected to $host:$port\n" if ($debug==1);
+	print "DEBUG Connected to $host:$port\n" if (($params{Debug})&&($params{Debug}==1));
 	my $self={};
 	$self->{_sock}=$sock;
 	$self->{_seq_real}=0;
@@ -230,7 +239,10 @@ sub new {
 	$self->{_contacts}={};
 	# this stores the MRIM's UIDs for contacts (internal use only)
 	$self->{_all_contacts}={};
-	$self->{_debug}=$debug if ($debug==1);
+	$self->{_debug}=$params{Debug} if (($params{Debug})&&($params{Debug}==1));
+	$self->{_freq}=$params{PollFrequency} || 5;
+	$self->{_freq}=10 if ($self->{_freq}>10);
+	print "DEBUG Poll Frequency: ".$self->{_freq}."\n" if ($self->{_debug});
 	bless $self;
 	return $self;
 }
@@ -268,7 +280,7 @@ sub login {
 	my ($self,$login,$pass)=@_;
 	my $status=STATUS_ONLINE;
 	print "DEBUG [status]: $status\n" if ($self->{_debug});
-	my $data=_to_lps($login)._to_lps($pass).pack("V",$status)._to_lps(MRIMUA);
+	my $data=_to_lps($login)._to_lps($pass).pack("V",$status)._to_lps("".MRIMUA.$VERSION);
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_LOGIN2,$data));
 	$self->{_seq_real}++;
 	$self->{_login}=$login;
@@ -298,7 +310,7 @@ sub authorize_user {
 # to add a contact to the contact list
 sub add_contact {
 	my ($self, $email)=@_;
-	printf("DEBUG [add contact]: $email\n",$msg) if ($self->{_debug});
+	print "DEBUG [add contact]: $email\n" if ($self->{_debug});
 	my $data=pack("V",0).pack("V",0xffffffff)._to_lps($email).pack("V",0).pack("V",0);
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_ADD_CONTACT,$data));
 	$self->{_seq_real}++;
@@ -386,14 +398,14 @@ sub _receive_data {
 	my $buffer="";
 	my $data="";
 	my $typ=0;
-	printf("DEBUG [recv packet]: waiting for header data\n",$msg) if ($self->{_debug});
+	print "DEBUG [recv packet]: waiting for header data\n" if ($self->{_debug});
 	return (MRIM_CS_LOGOUT,"") if (!($self->{_sock}));
 	my $s = IO::Select->new();
 	$s->add($self->{_sock});
 	my $dllen=0;
 	# this stuff is to not wait for ever data from the server
 	# note that we're mixing a bit unbuffered and buffered I/O, this is not 100% great	
-	if ($s->can_read(int($self->{_ping_period}/5))) {
+	if ($s->can_read(int($self->{_ping_period}/$self->{_freq}))) {
 		$self->{_sock}->recv($buffer,44);
 		my ($magic, $proto, $seq, $msg, $dlen, $from, $fromport, $r1, $r2, $r3, $r4) = unpack ("V11", $buffer);
 		use bytes;
@@ -429,6 +441,8 @@ sub _analyze_received_data {
 		} elsif (($datas[1]==0)||($datas[1]==MESSAGE_FLAG_RTF)) {
 			$data->set_message($datas[2],$self->{_login},"".$datas[3]);
 			$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_MESSAGE_RECV,_to_lps($datas[2]).pack("V",$datas[0])));
+		} elsif ($datas[1]==MESSAGE_FLAG_AUTHORIZE) {
+			$data->set_message($datas[2],$self->{_login},"REQUEST AUTHORIZATION: ".$datas[3]);
 		}
 	} elsif ($msgrcv==MRIM_CS_LOGOUT) {
 		$data->set_logout_from_server();
@@ -566,4 +580,4 @@ sub _to_lps {
 	return pack("V",length($str)).$str;
 }
 
-return 1;
+1;

@@ -120,7 +120,7 @@ sub my_local_time {
 
 sub mrim_conn {
 
-	my $mrim=Net::MRIM->new(0);
+	my $mrim=Net::MRIM->new();
 	$mrim->hello();
 	if (!$mrim->login($LOGIN,$PASSWORD)) {
 		print "LOGIN REJECTED\n";
