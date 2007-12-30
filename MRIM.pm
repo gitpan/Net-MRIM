@@ -81,7 +81,7 @@ sub get_contacts {
 
 package Net::MRIM;
 
-our $VERSION='0.10';
+our $VERSION='1.0';
 
 =pod
 
