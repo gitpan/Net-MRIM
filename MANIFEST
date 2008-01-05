@@ -1,10 +1,13 @@
 MRIM.pm
+MRIM/Data.pm
 Makefile.PL
 Changes
 MANIFEST
 Readme
 t/01.t
+t/02.t
 examples/answeringmachine.pl
 examples/mrim.pl
 examples/mrimwx.pl
+examples/country_list.pl
 META.yml                                 Module meta-data (added by MakeMaker)

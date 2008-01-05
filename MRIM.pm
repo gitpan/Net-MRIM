@@ -1,3 +1,10 @@
+#
+# $Date: 2008-01-05 12:12:42 $
+#
+# Copyright (c) 2007-2008 Alexandre Aufrere
+# Licensed under the terms of the GPL (see perldoc MRIM.pm)
+#
+
 use 5.008;
 use strict;
 
@@ -81,7 +88,7 @@ sub get_contacts {
 
 package Net::MRIM;
 
-our $VERSION='1.0';
+our $VERSION='1.01';
 
 =pod
 
@@ -114,23 +121,29 @@ To log in:
 
 To authorize a user:
 
- $mrim->authorize_user("friend\@mail.ru");
+ my $ret=$mrim->authorize_user("friend\@mail.ru");
 
 To add a user to contact list (sends automatically auth request):
 
- $mrim->add_contact("friend\@mail.ru");
+ $ret=$mrim->add_contact("friend\@mail.ru");
 
 To remove a user from contact list:
 
- $mrim->remove_contact("friend\@mail.ru");
+ $ret=$mrim->remove_contact("friend\@mail.ru");
 
 To send a message:
 
- my $ret=$mrim->send_message("friend\@mail.ru","hello");
+ $ret=$mrim->send_message("friend\@mail.ru","hello");
 
 Get information for a contact:
 
- my $ret=$mrim->contact_info("friend\@mail.ru");
+ $ret=$mrim->contact_info("friend\@mail.ru");
+ 
+Search for users:
+
+ $ret=$mrim->search_user(nickname, sex, country, online);
+
+Where sex=(1|2), country can be found at http://agent.mail.ru/region.txt and online=(0|1)
 
 Analyze the return of the message:
 
@@ -154,11 +167,11 @@ Disconnecting:
 
 =head1 AUTHOR
 
-Alexandre Aufrere <loopkin@nikosoft.net>
+Alexandre Aufrere <aau@cpan.org>
 
 =head1 COPYRIGHT
 
-Copyright (c) 2007 Alexandre Aufrere. This code may be used under the terms of the GPL version 2 (see at http://www.gnu.org/copyleft/gpl.html). The protocol remains the property of Mail.Ru (see at http://www.mail.ru).
+Copyright (c) 2007-2008 Alexandre Aufrere. This code may be used under the terms of the GPL version 2 (see at http://www.gnu.org/licenses/old-licenses/gpl-2.0.html). The protocol remains the property of Mail.Ru (see at http://www.mail.ru).
 
 =cut
 
@@ -305,6 +318,8 @@ sub authorize_user {
 	my $data=_to_lps($user);
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_AUTHORIZE,$data));
 	$self->{_seq_real}++;	
+	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
+	return _analyze_received_data($self,$msgrcv,$datarcv,$dlen);	
 }
 
 # to add a contact to the contact list
@@ -350,6 +365,20 @@ sub contact_info {
 	my $cuser=$1;
 	my $cdomain=$2;
 	my $data=pack("V",0x00000000)._to_lps($cuser).pack("V",0x00000001)._to_lps($cdomain);
+	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_WP_REQUEST,$data));
+	$self->{_seq_real}++;
+	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
+	return _analyze_received_data($self,$msgrcv,$datarcv,$dlen);
+}
+
+# search users. for now only by nickname, sex, country
+sub search_user {
+	my ($self, $nickname, $sex, $country, $online)=@_;
+	my $data='';
+	$data.=pack("V",0x00000002)._to_lps("$nickname") if ($nickname ne '');
+	$data.=pack("V",0x00000005)._to_lps("$sex") if ($sex ne '');
+	$data.=pack("V",0x0000000F)._to_lps("$country") if ($country ne '');
+	$data.=pack("V",0x00000009)._to_lps('1') if ($online == 1);
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_WP_REQUEST,$data));
 	$self->{_seq_real}++;
 	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
@@ -507,28 +536,45 @@ sub _analyze_received_data {
 		print "DEBUG add_contact_ack: $datas[0] $datas[1]\n" if ($self->{_debug});
 		$data->set_contact_list($self->{_groups},$self->{_contacts});
 	} elsif ($msgrcv==MRIM_CS_ANKETA_INFO) {
-		my @datas=_from_mrim_us("uuuusssssssssssssssssssssssss",$datarcv);
+		my @datas=_from_mrim_us("uuuu",$datarcv);
+		my $dataparse="";
+		for (my $i=0; $i<$datas[1]; $i++) { $dataparse.='ss'; }
 		my $fulldata="INFO\n";
-		for (my $i=4;$i<10;$i++) {
-			my $label=$datas[$i];
-			my $value=$datas[$i+15];
-			if ($label eq 'Username') {
-				$fulldata.="User\t\t: $value\@";
-			} elsif ($label eq 'Domain') {
-				$fulldata.=$value."\n";
-			} elsif ($label eq 'Sex') {
-				if ($value eq '1') {
-					$value='Male';
-				} elsif ($value eq '2') {
-					$value='Female';
-				} else {
-					$value='Unknown';
+		my $fentr=0;
+		while ($fentr<$datas[2]) {
+			@datas=_from_mrim_us("uuuu".$dataparse,$datarcv);
+			# this flag will trace if a record was found
+			my $found=1;
+			print "DEBUG anketa_info: found ".$datas[0].' '.$datas[1].' '.$datas[2].' '.$datas[3]." entries\n" if ($self->{_debug});
+			for (my $i=4;$i<($datas[1]+4);$i++) {
+				my $label=$datas[$i];
+				my $value=$datas[($i+$datas[1])];
+				my $entry.=_to_lps($value);
+				# this is to remove the entry from received data, to allow "iteration" ammong values
+				$datarcv=~s/$entry//;
+				if ($label eq 'Username') {
+					$found=0 if ($value eq '');
+					$fulldata.="User\t\t: $value\@" if ($found==1);
+				} elsif ($label eq 'Domain') {
+					$fulldata.=$value."\n" if ($found==1);
+				} elsif ($label eq 'Sex') {
+					if ($value eq '1') {
+						$value='Male';
+					} elsif ($value eq '2') {
+						$value='Female';
+					} else {
+						$value='Unknown';
+					}
+					$fulldata.=$label."\t\t: ".$value."\n" if ($found==1);
+				} else {			
+					$fulldata.=$label."\t: ".$value."\n" if ($found==1);
 				}
-				$fulldata.=$label."\t\t: ".$value."\n";
-			} else {			
-				$fulldata.=$label."\t: ".$value."\n";
 			}
+			$fentr++;
+			# this is the separator between two entries
+			$fulldata.="----------------------------------------\n" if ($found==1);
 		}
+		print "DEBUG anketa_info: $fulldata\n" if ($self->{_debug});
 		$data->set_message("SERVER",$self->{_login},$fulldata);
 	} else {
 		$data->set_message("DEBUG",$self->{_login},$datarcv) if ($self->{_debug});
