@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 
 #
-# $Date: 2008-01-05 01:24:18 $
+# $Date: 2008-01-11 00:05:31 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -91,6 +91,7 @@ sub OnQuit {
 package MRIMInfoDialog;
 use Wx qw(:everything);
 use Wx::Event qw(EVT_CLOSE EVT_BUTTON EVT_TEXT_ENTER);
+use Wx::Html;
 use base 'Wx::Dialog';
 
 sub new {
@@ -101,14 +102,13 @@ sub new {
                                  [-1, -1],        # default position
                                  [300, 200],      # size
                                  );
+	Wx::Image::AddHandler(new Wx::JPEGHandler());
 	my $topsizer = new Wx::BoxSizer(wxVERTICAL);
-	my $mwindow = new Wx::TextCtrl($self, -1,
-					$msg,
+	my $mwindow = new Wx::HtmlWindow($self, -1,					
 					wxDefaultPosition,
-					[500,300], 
-					wxTE_MULTILINE|wxVSCROLL|wxTE_READONLY
-					);
+					[500,300]);
 	my $btnok = new Wx::Button($self, -1, "Ok");
+	$mwindow->AppendToPage("<html><body>$msg</body></html>");
 	$topsizer->Add($mwindow,0, wxALL | wxEXPAND, 10);
 	$topsizer->Add($btnok,0, wxALL | wxEXPAND, 10);
 	EVT_BUTTON( $self, $btnok, \&OnOk);
@@ -124,6 +124,11 @@ sub OnOk {
 	$dialog->Destroy();
 }
 
+sub OnLinkClick {
+	my ($dialog,$link)=@_;
+	print $link->GetLinkInfo()->GetHref();
+}
+
 # the input dialog...
 package MRIMInputDialog;
 use Wx qw(:everything);
@@ -131,7 +136,7 @@ use Wx::Event qw(EVT_CLOSE EVT_BUTTON EVT_TEXT_ENTER);
 use base 'Wx::Dialog';
 
 sub new {
-	my ($class,$msg)=@_;
+	my ($class,$msg,$preinput)=@_;
 	my $self=$class->SUPER::new( undef,
                                  -1,
                                  'PerlMRIM::Input',
@@ -141,7 +146,7 @@ sub new {
 	my $topsizer = new Wx::BoxSizer(wxVERTICAL);
 	my $msglabel = new Wx::StaticText($self,-1, "$msg");
 	my $mwindow = new Wx::TextCtrl($self, -1,
-					"",
+					"$preinput",
 					wxDefaultPosition,
 					wxDefaultSize, 
 					wxTE_PROCESS_ENTER
@@ -486,25 +491,39 @@ sub mrim_conn {
 		# here we process messages we received from server, if any
 		if ($ret->is_message()) {
 			my $from=$ret->get_from();
-			if ($from ne 'SERVER') {
+			if ($from ne 'ANKETA') {
 				$from=~s/\@(mail.ru|inbox.ru|list.ru|bk.ru)//;
-				push @datain, my_local_time()." ".$from." > ".$ret->get_message()."\n";
+				if ($from ne 'OFFLINE') {
+					push @datain, my_local_time()." ".$from." > ".$ret->get_message()."\n";
+				} else {
+					push @datain, "OFFLINE MESSAGE\n".$ret->get_message()."\n";
+				}
 				push @datatypein, 'FROM';
 			} else {
 				my $ainfo=$ret->get_message();
-				my $anketa="";
+				my $anketa='<table border="0" cellpadding="4" cellspacing="0">';
+				my $umail='';
 				foreach my $info (split(/\n/,$ainfo)) {
-					$anketa.=$info."\n" if (($info=~m/^User/i)
-										||($info=~m/^Nickname/i)
-										||($info=~m/^Firstname/i)
-										||($info=~m/^LastName/i)
-										||($info=~m/^Sex/i)
-										||($info=~m/^Birthday/i)
-										||($info=~m/^Location/i)
-										||($info=~m/\-\-\-\-\-\-/));
+					if (($info=~m/^User/i)||($info=~m/^Nickname/i)||($info=~m/^Firstname/i)||($info=~m/^LastName/i)
+										||($info=~m/^Sex/i)||($info=~m/^Birthday/i)||($info=~m/^Location/i)) {
+						my $infoline=$info."\n";
+						$infoline=~s/\t+: /\<\/b\>\<\/td\>\<td\>/;
+						$infoline=~s/\n//;
+						$infoline='<tr><td><b>'.$infoline;
+						if ($info=~m/^User/i) {
+							$umail=$info ;
+							$umail=~s/^User\t+: (.*)$/$1/;
+							$infoline.="</td><td rowspan=\"7\"><img src=\"".$mrim->get_contact_avatar_url($umail)."\">";
+						}
+						$anketa.=$infoline."</td></tr>\n";
+					}
+					if ($info=~m/\-\-\-\-\-\-\-\-\-\-/) {
+						$anketa.="<tr><td colspan=\"3\"><hr></td></tr>\n";
+					}
 				}
+				$anketa.='</table>';
 				push @datain, $anketa;
-				push @datatypein, 'SERVER';
+				push @datatypein, 'ANKETA';
 			}
 			$signal=1;
 		} elsif ($ret->is_contact_list()) {
@@ -526,7 +545,6 @@ sub mrim_conn {
 			for ($icl=0;$icl<scalar(@clistkeys);$icl++) {
 				$clitem=$clistkeys[$icl];
 				if (_is_in_list($clitem,@nclistkeys)==0) {
-					#$data.=my_local_time().': '.$clitem." disconnected.\n" if ($clitem ne 'x');
 					$clistkeys[$icl]='x';
 				}
 			}
@@ -570,7 +588,7 @@ sub OnThreadEvent {
 	for (my $i=0; $i<scalar(@datain); $i++) {
 		my $data=$datain[$i];		
 		Encode::from_to($data,"cp1251","utf8");
-		if ($datatypein[$i] eq 'SERVER') {
+		if ($datatypein[$i] eq 'ANKETA') {
 			show_info($frame,$data);
 		} else {
 			if ($datatypein[$i] eq 'TO') {
@@ -578,8 +596,8 @@ sub OnThreadEvent {
 				$frame->{_cwindow_color} = 2;
 				append_msg_text($frame,$data);
 			} else {
-				if ($data=~m/[0-9\:]+\sOFFLINE/) {
-					show_info($frame,$data);
+				if ($data=~m/^OFFLINE/) {
+					show_info($frame,'<pre>'.$data.'</pre>');
 				} else {
 					$frame->{_cwindow}->SetDefaultStyle(Wx::TextAttr->new(wxBLUE)) if ($frame->{_cwindow_color} == 2);
 					$frame->{_cwindow_color} = 1;
@@ -674,7 +692,7 @@ sub OnInfo {
 # an "add user" event has been sent by the interface
 sub OnAddUser {
 	my $frame=shift;
-	my $inputDialog = new MRIMInputDialog('Enter email of the user to add to contact list:');
+	my $inputDialog = new MRIMInputDialog('Enter email of the user to add to contact list:','');
 	$inputDialog->ShowModal();
 	my $input=$inputDialog->getValue();
 	if ($input =~ m/\@/) {
@@ -685,7 +703,7 @@ sub OnAddUser {
 # a "remove user" event has been sent by the interface
 sub OnDelUser {
 	my $frame=shift;
-	my $inputDialog = new MRIMInputDialog('Enter email of the user to remove from contact list:');
+	my $inputDialog = new MRIMInputDialog('Enter email of the user to remove from contact list:',selected_contact($frame));
 	$inputDialog->ShowModal();
 	my $input=$inputDialog->getValue();
 	if ($input =~ m/\@/) {
@@ -696,7 +714,7 @@ sub OnDelUser {
 # an "authorize user" event has been sent by the interface
 sub OnAuthUser {
 	my $frame=shift;
-	my $inputDialog = new MRIMInputDialog('Enter email of the user to authorize:');
+	my $inputDialog = new MRIMInputDialog('Enter email of the user to authorize:',selected_contact($frame));
 	$inputDialog->ShowModal();
 	my $input=$inputDialog->getValue();
 	if ($input =~ m/\@/) {
@@ -716,6 +734,15 @@ sub OnSearchUser {
 }
 
 # below are utility methods
+
+sub selected_contact {
+	my $frame=shift;
+	my @indexes=$frame->{_clist}->GetSelections();
+	if (scalar(@indexes)>0) {
+		return ''.$onlinemails[$indexes[0]];
+	}
+	return '';
+}
 
 sub init_msg_text {
 	my ($frame)=@_;
@@ -794,4 +821,17 @@ my $app = MRIMApp->new;
 $app->MainLoop;
 
 exit;
+
+# utility function for i18n
+sub get_lang {
+	my $lang='en';
+	if ($^O eq 'linux') {
+		$lang=$ENV{LANG};
+	} elsif ($^O eq 'darwin') {
+		$lang=`/usr/bin/defaults read -g AppleLocale`;
+	} 
+	$lang=~s/^([a-z][a-z]).*$/$1/;
+	return $lang;
+}
+
 1;

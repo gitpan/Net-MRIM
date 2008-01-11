@@ -1,5 +1,5 @@
 #
-# $Date: 2008-01-05 12:12:42 $
+# $Date: 2008-01-11 00:05:31 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -88,7 +88,7 @@ sub get_contacts {
 
 package Net::MRIM;
 
-our $VERSION='1.01';
+our $VERSION='1.02';
 
 =pod
 
@@ -211,6 +211,7 @@ use constant {
  MRIM_CS_MESSAGE 		=> 0x1008,	## C->S, UL flags, LPS to, LPS message, LPS rtf-message
   MESSAGE_FLAG_NORECV	=> 0x00000004,
   MESSAGE_FLAG_AUTHORIZE	=> 0x00000008,
+  MESSAGE_FLAG_SYSTEM	=> 0x00000040,
   MESSAGE_FLAG_RTF		=> 0x00000080,
   MESSAGE_FLAG_NOTIFY	=> 0x00000400,
  MRIM_CS_MESSAGE_RECV	=> 0x1011,
@@ -329,8 +330,8 @@ sub add_contact {
 	my $data=pack("V",0).pack("V",0xffffffff)._to_lps($email).pack("V",0).pack("V",0);
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_ADD_CONTACT,$data));
 	$self->{_seq_real}++;
-	# not in the protocol: after sending an auth request, one should send an auth message !
-	$data=pack("V",MESSAGE_FLAG_AUTHORIZE)._to_lps($email)._to_lps("Authorize")._to_lps("");
+	# not in the protocol: after sending an add request, one should send an auth message !
+	$data=pack("V",MESSAGE_FLAG_AUTHORIZE)._to_lps($email)._to_lps("Please authorize me")._to_lps("");
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_MESSAGE,$data));
 	$self->{_seq_real}++;
 	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
@@ -369,6 +370,15 @@ sub contact_info {
 	$self->{_seq_real}++;
 	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
 	return _analyze_received_data($self,$msgrcv,$datarcv,$dlen);
+}
+
+# get contact avatar url
+sub get_contact_avatar_url {
+	my ($self, $email)=@_;
+	$email=~m/^([a-z0-9\_\-\.]+)\@([a-z0-9\_\-\.]+)$/i;
+	my $cuser=$1;
+	my $cdomain=$2;
+	return "http://avt.foto.mail.ru/mail/$cuser/_avatar";	
 }
 
 # search users. for now only by nickname, sex, country
@@ -460,7 +470,19 @@ sub _analyze_received_data {
 	if (!defined($msgrcv)) {
 		$data->set_logout_from_server();
 	} elsif ($msgrcv==MRIM_CS_OFFLINE_MESSAGE_ACK) {
-		$data->set_message("OFFLINE",$self->{_login},substr($datarcv,8,-1));
+		my $msg='';
+		my @datas=_from_mrim_us("s",substr($datarcv,8,-1));
+		LINE: foreach my $msgline (split(/\n/,$datas[1])) {
+			# some headers cleanup
+			if ($msgline!~m/^(Boundary:|Version:|X-MRIM-Flags:|Subject:|\-\-)/) {
+				$msg.=$msgline."\n";
+			}
+			# remove everything past the boundary
+			elsif ($msgline=~m/^\-\-[0-9A-Z]+/) {
+				last LINE;
+			}
+		}
+		$data->set_message("OFFLINE",$self->{_login},$msg);
 		$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_DELETE_OFFLINE_MESSAGE,substr($datarcv,0,8)));
 	} elsif ($msgrcv==MRIM_CS_MESSAGE_ACK) {
 		my @datas=_from_mrim_us("uuss",$datarcv);
@@ -471,7 +493,9 @@ sub _analyze_received_data {
 			$data->set_message($datas[2],$self->{_login},"".$datas[3]);
 			$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_MESSAGE_RECV,_to_lps($datas[2]).pack("V",$datas[0])));
 		} elsif ($datas[1]==MESSAGE_FLAG_AUTHORIZE) {
-			$data->set_message($datas[2],$self->{_login},"REQUEST AUTHORIZATION: ".$datas[3]);
+			$data->set_message($datas[2],$self->{_login},'REQUEST AUTHORIZATION: '.$datas[3]);
+		} elsif ($datas[1]==MESSAGE_FLAG_SYSTEM) {
+			$data->set_message('SERVER',$self->{_login},$datas[3]);
 		}
 	} elsif ($msgrcv==MRIM_CS_LOGOUT) {
 		$data->set_logout_from_server();
@@ -551,6 +575,7 @@ sub _analyze_received_data {
 				my $value=$datas[($i+$datas[1])];
 				my $entry.=_to_lps($value);
 				# this is to remove the entry from received data, to allow "iteration" ammong values
+				$entry=~s/(\W)/\\$1/g;
 				$datarcv=~s/$entry//;
 				if ($label eq 'Username') {
 					$found=0 if ($value eq '');
@@ -575,7 +600,7 @@ sub _analyze_received_data {
 			$fulldata.="----------------------------------------\n" if ($found==1);
 		}
 		print "DEBUG anketa_info: $fulldata\n" if ($self->{_debug});
-		$data->set_message("SERVER",$self->{_login},$fulldata);
+		$data->set_message('ANKETA',$self->{_login},$fulldata);
 	} else {
 		$data->set_message("DEBUG",$self->{_login},$datarcv) if ($self->{_debug});
 	}
