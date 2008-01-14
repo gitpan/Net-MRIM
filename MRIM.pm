@@ -1,5 +1,5 @@
 #
-# $Date: 2008-01-11 00:05:31 $
+# $Date: 2008-01-14 00:33:38 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -88,7 +88,7 @@ sub get_contacts {
 
 package Net::MRIM;
 
-our $VERSION='1.02';
+our $VERSION='1.03';
 
 =pod
 
@@ -198,7 +198,7 @@ use constant {
   STATUS_ONLINE    => 0x00000001,
   STATUS_AWAY      => 0x00000002,
   STATUS_UNDETERMINED   => 0x00000003,
-
+ MRIM_CS_USER_INFO		=> 0x1015,
  MRIM_CS_ADD_CONTACT 	=> 0x1019,  # C->S UL flag, UL group_id, LPS email, LPS name
   CONTACT_FLAG_VISIBLE	=> 0x00000008,
   CONTACT_FLAG_REMOVED	=> 0x00000001,
@@ -487,15 +487,18 @@ sub _analyze_received_data {
 	} elsif ($msgrcv==MRIM_CS_MESSAGE_ACK) {
 		my @datas=_from_mrim_us("uuss",$datarcv);
 		# below is a work-around: it seems that sometimes message_flag is left to 0...
+		# as well, it seems the flags can be combined...
 		if ($datas[1]==MESSAGE_FLAG_NORECV) {
 			$data->set_message($datas[2],$self->{_login},"".$datas[3]);
 		} elsif (($datas[1]==0)||($datas[1]==MESSAGE_FLAG_RTF)) {
 			$data->set_message($datas[2],$self->{_login},"".$datas[3]);
 			$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_MESSAGE_RECV,_to_lps($datas[2]).pack("V",$datas[0])));
-		} elsif ($datas[1]==MESSAGE_FLAG_AUTHORIZE) {
+		} elsif (($datas[1]==MESSAGE_FLAG_AUTHORIZE)||($datas[1]==(MESSAGE_FLAG_AUTHORIZE+MESSAGE_FLAG_NORECV))) {
 			$data->set_message($datas[2],$self->{_login},'REQUEST AUTHORIZATION: '.$datas[3]);
-		} elsif ($datas[1]==MESSAGE_FLAG_SYSTEM) {
+		} elsif (($datas[1]==MESSAGE_FLAG_SYSTEM)||($datas[1]==(MESSAGE_FLAG_SYSTEM+MESSAGE_FLAG_NORECV))) {
 			$data->set_message('SERVER',$self->{_login},$datas[3]);
+		} else {
+			print "DEBUG: ack msg $datas[1] from $datas[2] text: $datas[3]\n" if ($self->{_debug});
 		}
 	} elsif ($msgrcv==MRIM_CS_LOGOUT) {
 		$data->set_logout_from_server();
@@ -537,15 +540,22 @@ sub _analyze_received_data {
 		$self->{_all_contacts}=$all_contacts;
 		$self->{_groups}=$groups;
 		$data->set_contact_list($groups,$contacts);
-	} elsif ($msgrcv==MRIM_CS_USER_STATUS) {
-		my @datas=_from_mrim_us("us",$datarcv);
+	} elsif (($msgrcv==MRIM_CS_USER_STATUS)||($msgrcv==MRIM_CS_AUTHORIZE_ACK)) {
+		# if user changes status, or has accepted to be added to our list,
+		# then we should update the contact list accordingly
+		my @datas=();
+		if ($msgrcv==MRIM_CS_USER_STATUS) {
+			@datas=_from_mrim_us("us",$datarcv);
+		} else {
+			@datas=_from_mrim_us("s",$datarcv);
+		}
 		my $contacts=$self->{_contacts};
 		my $all_contacts=$self->{_all_contacts};
 		my $groups=$self->{_groups};
 		my @ckeys=keys%{$contacts};
 		my $i=scalar(keys(%{$all_contacts}))+1;
 		$i=20 if ($i<10);
-		if (($datas[0] != STATUS_OFFLINE)&&($datas[0] != STATUS_UNDETERMINED)) {
+		if (($msgrcv==MRIM_CS_AUTHORIZE_ACK)||(($datas[0] != STATUS_OFFLINE)&&($datas[0] != STATUS_UNDETERMINED))) {
 			$contacts->{$datas[1]}=$datas[1];
 			$all_contacts->{$datas[1]}=$i;
 		} elsif (($datas[0] == STATUS_OFFLINE)&&(grep(/$datas[1]/,@ckeys))) {
@@ -556,6 +566,7 @@ sub _analyze_received_data {
 		$self->{_all_contacts}=$all_contacts;
 		$data->set_contact_list($groups,$contacts);
 	} elsif (($msgrcv==MRIM_CS_ADD_CONTACT_ACK)||($msgrcv==MRIM_CS_MODIFY_CONTACT_ACK)) {
+		# this is useless for now, as the contact list only stores online users
 		my @datas=_from_mrim_us("uu",$datarcv.pack("V",0));
 		print "DEBUG add_contact_ack: $datas[0] $datas[1]\n" if ($self->{_debug});
 		$data->set_contact_list($self->{_groups},$self->{_contacts});
@@ -601,6 +612,9 @@ sub _analyze_received_data {
 		}
 		print "DEBUG anketa_info: $fulldata\n" if ($self->{_debug});
 		$data->set_message('ANKETA',$self->{_login},$fulldata);
+	} elsif ($msgrcv==MRIM_CS_USER_INFO) {
+		my @datas=_from_mrim_us("ssss",$datarcv);
+		$data->set_message('SERVER',$self->{_login},"$datas[0]: $datas[1] | $datas[2]: $datas[3]");
 	} else {
 		$data->set_message("DEBUG",$self->{_login},$datarcv) if ($self->{_debug});
 	}

@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 
 #
-# $Date: 2008-01-11 00:05:31 $
+# $Date: 2008-01-13 13:13:06 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -25,6 +25,9 @@ my $DISPLAY_NICK=0;
 ##                     ##
 my $LOGIN="xxx";
 my $PASSWORD="xxx";
+my $VERSION='0.6';
+my @TRNS=('0');
+my $TLANG='';
 
 # the login dialog...
 package MRIMLoginDialog;
@@ -42,21 +45,21 @@ sub new {
                                  );
 	my $topsizer = new Wx::BoxSizer(wxVERTICAL);
 	my $lsizer = new Wx::BoxSizer(wxHORIZONTAL);
-	my $loginlabel = new Wx::StaticText($self,-1, "Login: ");
+	my $loginlabel = new Wx::StaticText($self,-1, t::t("Login").": ");
 	my $enterlogin =  new Wx::TextCtrl($self, 3158,
 					"",
 					wxDefaultPosition,
 					wxDefaultSize
 					);
 	my $psizer = new Wx::BoxSizer(wxHORIZONTAL);
-	my $pwdlabel = new Wx::StaticText($self,-1, "Password: ");
+	my $pwdlabel = new Wx::StaticText($self,-1, t::t("Password").": ");
 	my $enterpwd =  new Wx::TextCtrl($self, 3159,
 					"",
 					wxDefaultPosition,
 					wxDefaultSize,
 					wxTE_PASSWORD|wxTE_PROCESS_ENTER
 					);
-	my $btnlogin = new Wx::Button($self, 3160, "Connect");
+	my $btnlogin = new Wx::Button($self, 3160, t::t("Connect"));
 	$lsizer->Add($loginlabel,0, wxALL | wxEXPAND, 10);
 	$lsizer->Add($enterlogin,0, wxALL | wxEXPAND, 10);
 	$psizer->Add($pwdlabel,0, wxALL | wxEXPAND, 10);
@@ -107,7 +110,7 @@ sub new {
 	my $mwindow = new Wx::HtmlWindow($self, -1,					
 					wxDefaultPosition,
 					[500,300]);
-	my $btnok = new Wx::Button($self, -1, "Ok");
+	my $btnok = new Wx::Button($self, -1, t::t("Ok"));
 	$mwindow->AppendToPage("<html><body>$msg</body></html>");
 	$topsizer->Add($mwindow,0, wxALL | wxEXPAND, 10);
 	$topsizer->Add($btnok,0, wxALL | wxEXPAND, 10);
@@ -152,8 +155,8 @@ sub new {
 					wxTE_PROCESS_ENTER
 					);
 	my $bsizer = new Wx::BoxSizer(wxHORIZONTAL);
-	my $btnok = new Wx::Button($self, -1, "Ok");
-	my $btncancel = new Wx::Button($self, -1, "Cancel");
+	my $btnok = new Wx::Button($self, -1, t::t("Ok"));
+	my $btncancel = new Wx::Button($self, -1, t::t("Cancel"));
 	$bsizer->Add($btncancel,0, wxALL | wxEXPAND, 10);	
 	$bsizer->Add($btnok,0, wxALL | wxEXPAND, 10);	
 	$topsizer->Add($msglabel,0, wxALL | wxEXPAND, 10);
@@ -207,7 +210,7 @@ sub new {
                                  );
 	my $topsizer = new Wx::BoxSizer(wxVERTICAL);
 	my $nsizer = new Wx::BoxSizer(wxHORIZONTAL);
-	my $nicknamelabel = new Wx::StaticText($self,-1, "Nickname: ");
+	my $nicknamelabel = new Wx::StaticText($self,-1, t::t("Nickname").": ");
 	my $enternickname =  new Wx::TextCtrl($self, 3058,
 					"",
 					wxDefaultPosition,
@@ -215,14 +218,14 @@ sub new {
 					wxTE_PROCESS_ENTER
 					);
 	my $ssizer = new Wx::BoxSizer(wxHORIZONTAL);
-	my $slabel = new Wx::StaticText($self,-1, "Sex: ");
+	my $slabel = new Wx::StaticText($self,-1, t::t("Sex").": ");
 	my $choosesex = new Wx::Choice($self, 3059,
 					wxDefaultPosition,
 					wxDefaultSize,
-					['','Male','Female']
+					['',t::t('Male'),t::t('Female')]
 					);
 	my $csizer = new Wx::BoxSizer(wxHORIZONTAL);
-	my $clabel = new Wx::StaticText($self, -1, "Country: ");
+	my $clabel = new Wx::StaticText($self, -1, t::t("Country").": ");
 	my $choosecountry = new Wx::ComboBox($self, 3060,
 					"",
 					wxDefaultPosition,
@@ -236,14 +239,14 @@ sub new {
 			$choosecountry->Append($country);
 	}
 	my $osizer = new Wx::BoxSizer(wxHORIZONTAL);
-	my $olabel = new Wx::StaticText($self, -1, "Online: ");
+	my $olabel = new Wx::StaticText($self, -1, t::t("Online").": ");
 	my $checkonline = new Wx::CheckBox($self, 3061, 
-					'Check to search only online users',
+					t::t('Check to search only online users'),
 					wxDefaultPosition,
 					wxDefaultSize);
 	my $bsizer = new Wx::BoxSizer(wxHORIZONTAL);
-	my $btnsearch = new Wx::Button($self, 3062, "Search");
-	my $btncancel = new Wx::Button($self, 3063, "Cancel");
+	my $btnsearch = new Wx::Button($self, 3062, t::t("Search"));
+	my $btncancel = new Wx::Button($self, 3063, t::t("Cancel"));
 	$nsizer->Add($nicknamelabel,0, wxALL | wxEXPAND, 10);
 	$nsizer->Add($enternickname,0, wxALL | wxEXPAND, 10);
 	$ssizer->Add($slabel,0, wxALL | wxEXPAND, 10);
@@ -327,7 +330,7 @@ use utf8;
 use threads;
 use threads::shared;
 # import the event registration function
-use Wx::Event qw(EVT_COMMAND EVT_IDLE EVT_CLOSE EVT_TEXT_ENTER EVT_LISTBOX EVT_BUTTON);
+use Wx::Event qw(EVT_COMMAND EVT_IDLE EVT_CLOSE EVT_TEXT_ENTER EVT_LISTBOX EVT_BUTTON EVT_MENU);
 use Wx qw(:everything);
 use Net::MRIM;
 use Encode;
@@ -373,21 +376,17 @@ sub new {
 					wxDefaultSize,
 					wxTE_PROCESS_ENTER
 					);
-	#my $btnquit = new Wx::Button($self, 3459, "Quit");
-	my $btninfo = new Wx::Button($self, 3460, "Info");
-	my $btnadd = new Wx::Button($self, 3461, "Add User");
-	my $btndel = new Wx::Button($self, 3462, "Remove");
-	my $btnauth = new Wx::Button($self, 3463, "Authorize");
-	my $btnsearch = new Wx::Button($self, 3464, "Search");
-	my $status = new Wx::StaticText($self, 3465, "Logging in...");
+	my $btninfo = new Wx::Button($self, 3460, t::t("Info"));
+	my $btnadd = new Wx::Button($self, 3461, t::t("Add User"));
+	my $btndel = new Wx::Button($self, 3462, t::t("Remove"));
+	my $btnauth = new Wx::Button($self, 3463, t::t("Authorize"));
+	my $status = new Wx::StaticText($self, 3465, t::t("Logging in..."));
 	$upsizer->Add($clist,0,wxEXPAND | wxALL, 10);
 	$upsizer->Add($cwindow,0,wxEXPAND | wxALL, 10);
-	#$btnsizer->Add($btnquit,0,wxEXPAND | wxALL, 10);
 	$btnsizer->Add($btninfo,0,wxEXPAND | wxALL, 10);
 	$btnsizer->Add($btnadd,0,wxEXPAND | wxALL, 10);
 	$btnsizer->Add($btndel,0,wxEXPAND | wxALL, 10);
 	$btnsizer->Add($btnauth,0,wxEXPAND | wxALL, 10);
-	$btnsizer->Add($btnsearch,0,wxEXPAND | wxALL, 10);
 	$btnsizer->Add($status,0,wxEXPAND | wxALL, 10);
 	$topsizer->Add($upsizer,0, wxEXPAND | wxALL);
 	$topsizer->Add($btnsizer,0, wxEXPAND | wxALL);
@@ -398,18 +397,31 @@ sub new {
 	$self->{_entertext}=$entertext;
 	$self->{_topsizer}=$topsizer;
 	$self->{_status}=$status;
+
+	my $actionMenu = new Wx::Menu();
+	$actionMenu->Append(3504,t::t("&Search People..."));
+	$actionMenu->AppendSeparator();	$actionMenu->Append(3505,t::t("&Quit"));
+	my $helpMenu = new Wx::Menu();
+	$helpMenu->Append(3506,t::t("&Check for Updates..."));
+	$helpMenu->Append(3507,t::t("&About..."));
+	my $menuBar = new Wx::MenuBar();
+	$menuBar->Append($actionMenu,t::t("&Action"));
+	$menuBar->Append($helpMenu,t::t("&Help"));
+	$self->SetMenuBar($menuBar);
 	
 	EVT_COMMAND( $self, -1, $DONE_EVENT, \&OnThreadEvent );
 	EVT_COMMAND( $self, -1, $LOGOUT_EVENT, \&OnLogoutEvent );
 	EVT_TEXT_ENTER( $self, -1, \&OnTextEnter );
 	EVT_LISTBOX( $self, -1, \&OnListBoxClicked );
-	#EVT_BUTTON( $self, $btnquit, \&OnQuit);
-	EVT_CLOSE( $self, \&OnQuit);
 	EVT_BUTTON( $self, $btninfo, \&OnInfo);
 	EVT_BUTTON( $self, $btnadd, \&OnAddUser);
 	EVT_BUTTON( $self, $btndel, \&OnDelUser);
 	EVT_BUTTON( $self, $btnauth, \&OnAuthUser);
-	EVT_BUTTON( $self, $btnsearch, \&OnSearchUser);
+	EVT_MENU( $self, 3504, \&OnSearchUser);
+	EVT_MENU( $self, 3505, \&OnQuit);
+	EVT_CLOSE( $self, \&OnQuit);
+	EVT_MENU( $self, 3506, \&OnCheckUpdate);
+	EVT_MENU( $self, 3507, \&OnAbout);
 
 	# here begins the real stuff
 	# first, open the login box, and wait for user input
@@ -440,7 +452,7 @@ sub mrim_conn {
 			);
 	$mrim->hello();
 	if (!$mrim->login($LOGIN,$PASSWORD)) {
-		@dataout=("Incorrect login or password.");
+		@dataout=(t::t("Incorrect login or password."));
 		my $threvent = new Wx::PlThreadEvent( -1, $LOGOUT_EVENT, $result );
 		Wx::PostEvent( $handler, $threvent );
 		return 1;
@@ -496,7 +508,7 @@ sub mrim_conn {
 				if ($from ne 'OFFLINE') {
 					push @datain, my_local_time()." ".$from." > ".$ret->get_message()."\n";
 				} else {
-					push @datain, "OFFLINE MESSAGE\n".$ret->get_message()."\n";
+					push @datain, t::t('OFFLINE MESSAGE')."\n".$ret->get_message()."\n";
 				}
 				push @datatypein, 'FROM';
 			} else {
@@ -552,7 +564,7 @@ sub mrim_conn {
 			$signal=1;
 		} elsif ($ret->is_logout_from_server()) {
 			# send logout event to main app
-			@dataout=("Logged out from server.\nMaybe you connected from another location?");
+			@dataout=(t::t("Logged out from server.\nMaybe you connected from another location?"));
 			my $threvent = new Wx::PlThreadEvent( -1, $LOGOUT_EVENT, $result );
 			Wx::PostEvent( $handler, $threvent );
 			return 1;
@@ -576,9 +588,9 @@ sub OnTextEnter {
 	if (scalar(@indexes)>0) {
 		$frame->{_entertext}->Clear();
 		push @dataout, 's'.$onlineids[$indexes[0]].' '.$input;
-		$frame->{_status}->SetLabel("Sending...");
+		$frame->{_status}->SetLabel(t::t("Sending..."));
 	} else {
-		show_error($frame,"No contact selected !");
+		show_error($frame,t::t("No contact selected !"));
 	}
 }
 
@@ -608,7 +620,11 @@ sub OnThreadEvent {
 	}
 	@datain=();
 	@datatypein=();
-	$frame->{_status}->SetLabel("");
+	if (selected_contact($frame) ne '') {
+		$frame->{_status}->SetLabel(t::t("Send to").": ".selected_contact($frame));
+	} else {
+		$frame->{_status}->SetLabel("");
+	}
 	# update contact list
 	if ($clistupd==1) {
 		my $selecteditem='';
@@ -644,7 +660,7 @@ sub OnThreadEvent {
 		# restore selected contact, if any
 		if ($selectedindex>-1) {	
 			$frame->{_clist}->SetSelection($selectedindex);
-			$frame->{_status}->SetLabel($selecteditem);
+			$frame->{_status}->SetLabel(t::t("Send to").": ".$selecteditem);
 		}
 		$frame->{_topsizer}->Fit($frame);
 		$frame->{_topsizer}->SetSizeHints($frame);
@@ -664,7 +680,7 @@ sub OnListBoxClicked {
 	my $frame=shift;
 	my @indexes=$frame->{_clist}->GetSelections();
 	if (scalar(@indexes)>0) {
-		$frame->{_status}->SetLabel("".$onlinemails[$indexes[0]]);
+		$frame->{_status}->SetLabel(t::t("Send to").": ".$onlinemails[$indexes[0]]);
 	}
 	$frame->{_entertext}->SetFocus();
 }
@@ -672,7 +688,7 @@ sub OnListBoxClicked {
 # a close event has been sent by the interface
 sub OnQuit {
 	my $frame=shift;
-	$frame->{_status}->SetLabel("Disconnecting....");
+	$frame->{_status}->SetLabel(t::t("Disconnecting...."));
 	push @dataout,"quit";
 	$frame->{_conn}->join() if (defined($frame->{_conn}));;
 	exit;
@@ -685,14 +701,14 @@ sub OnInfo {
 	if (scalar(@indexes)>0) {
 		push @dataout, "i".$onlineids[$indexes[0]];
 	} else {
-		show_error($frame,"No contact selected !");
+		show_error($frame,t::t("No contact selected !"));
 	}	
 }
 
 # an "add user" event has been sent by the interface
 sub OnAddUser {
 	my $frame=shift;
-	my $inputDialog = new MRIMInputDialog('Enter email of the user to add to contact list:','');
+	my $inputDialog = new MRIMInputDialog(t::t('Enter email of the user to add to contact list:'),'');
 	$inputDialog->ShowModal();
 	my $input=$inputDialog->getValue();
 	if ($input =~ m/\@/) {
@@ -703,7 +719,7 @@ sub OnAddUser {
 # a "remove user" event has been sent by the interface
 sub OnDelUser {
 	my $frame=shift;
-	my $inputDialog = new MRIMInputDialog('Enter email of the user to remove from contact list:',selected_contact($frame));
+	my $inputDialog = new MRIMInputDialog(t::t('Enter email of the user to remove from contact list:'),selected_contact($frame));
 	$inputDialog->ShowModal();
 	my $input=$inputDialog->getValue();
 	if ($input =~ m/\@/) {
@@ -714,7 +730,7 @@ sub OnDelUser {
 # an "authorize user" event has been sent by the interface
 sub OnAuthUser {
 	my $frame=shift;
-	my $inputDialog = new MRIMInputDialog('Enter email of the user to authorize:',selected_contact($frame));
+	my $inputDialog = new MRIMInputDialog(t::t('Enter email of the user to authorize:'),selected_contact($frame));
 	$inputDialog->ShowModal();
 	my $input=$inputDialog->getValue();
 	if ($input =~ m/\@/) {
@@ -732,6 +748,28 @@ sub OnSearchUser {
 		push @dataout,$str;
 	}
 }
+
+# about info...
+sub OnAbout {
+	my $frame=shift;
+	show_info($frame,"<pre>PerlMRIM v$VERSION\n"
+	."Copyright 2007-2008 Alexandre Aufrere &lt;aau\@cpan.org&gt;\n"
+	."Protocol (c) Mail.Ru http://agent.mail.ru</pre>");
+}
+
+# check for updates !
+sub OnCheckUpdate {
+	my $frame=shift;
+	use LWP::UserAgent;
+	my $ua = new LWP::UserAgent();
+	$ua->agent("PerlMRIM/$VERSION");
+	my $req = HTTP::Request->new(GET => 'http://www.nikosoft.net/mrim/version.php?myversion='.$VERSION.'&mylang='.$TLANG);
+	my $res = $ua->request($req);
+	if ($res->is_success) {
+		show_info($frame,$res->content);
+	}
+}
+
 
 # below are utility methods
 
@@ -777,7 +815,7 @@ sub show_error {
 sub show_info {
 	my ($frame,$msg)=@_;
 	my $msgbox=new MRIMInfoDialog($msg);
-	$msgbox->ShowModal();
+	$msgbox->Show();
 }
 
 sub my_local_time {
@@ -813,10 +851,12 @@ use Wx;
 use Wx::Event qw(EVT_COMMAND EVT_IDLE EVT_CLOSE);
 use POSIX qw(locale_h);
 
+$TLANG=get_lang();
+
 # Locale charset is set as UTF-8.
-# en_US is chosen as locale itself only because it's
-# the most likely to be supported on any system.
-setlocale(LC_ALL,'en_US.UTF-8');
+setlocale(LC_ALL,$TLANG.'.UTF-8');
+$ENV{LANG}=$TLANG.'.UTF-8';
+$TLANG=~s/^([a-z][a-z]).*$/$1/;
 my $app = MRIMApp->new;
 $app->MainLoop;
 
@@ -824,14 +864,39 @@ exit;
 
 # utility function for i18n
 sub get_lang {
-	my $lang='en';
+	my $lang='en_US';
 	if ($^O eq 'linux') {
 		$lang=$ENV{LANG};
 	} elsif ($^O eq 'darwin') {
 		$lang=`/usr/bin/defaults read -g AppleLocale`;
 	} 
-	$lang=~s/^([a-z][a-z]).*$/$1/;
+	$lang=~s/\n//;
 	return $lang;
 }
+
+package t;
+
+# translate !
+sub t {
+	my ($str)=@_;
+	if ($TRNS[0] eq '0') {
+		open (TRN,'trans.ini');
+		@TRNS=<TRN>;
+		close TRN;
+	}
+	my $strn='';
+	foreach my $ltrn (@TRNS) {
+		if ($ltrn=~m/^\[([a-z][a-z])\]$/) {
+			$strn=$1;
+		}
+		if ($strn eq $TLANG) {
+			$ltrn=~s/\n//;
+			my ($orig,$trans)=split(/\=/,$ltrn);
+			return $trans if ($orig eq $str);
+		}
+	}
+	return $str;
+}
+
 
 1;
