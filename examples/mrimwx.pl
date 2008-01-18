@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 
 #
-# $Date: 2008-01-13 13:13:06 $
+# $Date: 2008-01-18 22:50:17 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -19,13 +19,16 @@ use strict;
 my $LAST_HISTORY_LINES=50;
 # Display nickname (1) or username (0) in contact list
 my $DISPLAY_NICK=0;
+# before wxPerl version 0.8, notification isn't really nice, so you can deactivate here below
+# after version 0.80 it just works, and cannot be disabled.
+my $NOTIFY=1;
 
 ##                     ##
 ## DO NOT MODIFY BELOW ##
 ##                     ##
 my $LOGIN="xxx";
 my $PASSWORD="xxx";
-my $VERSION='0.6';
+my $VERSION='0.7';
 my @TRNS=('0');
 my $TLANG='';
 
@@ -127,11 +130,6 @@ sub OnOk {
 	$dialog->Destroy();
 }
 
-sub OnLinkClick {
-	my ($dialog,$link)=@_;
-	print $link->GetLinkInfo()->GetHref();
-}
-
 # the input dialog...
 package MRIMInputDialog;
 use Wx qw(:everything);
@@ -192,6 +190,74 @@ sub getValue {
 	return $self->{_value};
 }
 
+# the info dialog...
+package MRIMNotifyDialog;
+use Wx qw(:everything);
+use Wx::Event qw(EVT_CLOSE EVT_BUTTON EVT_TEXT_ENTER);
+use Wx::Html;
+use base 'Wx::Dialog';
+
+sub new {
+	my ($class,$msg,$ntype,$nvalue)=@_;
+	# ntype 0 : small text notification (for mail notification)
+	# ntype 1 : big text notification with small chars (for offline messages)
+	# ntype 2 : authorize notification, requires nvalue
+	my ($x,$y)=(Wx::GetDisplaySize()->GetWidth(),Wx::GetDisplaySize()->GetHeight());
+	my $big=0;
+	$big=1 if ($ntype!=0);
+	$x-=(250+(80*$big));
+	$y-=(250+(80*$big));
+	my $self=$class->SUPER::new( undef,
+                                 -1,
+                                 'PerlMRIM::Notify',
+                                 [$x, $y],        # default position
+                                 [200, 100],      # size
+                                 wxCAPTION|wxSTAY_ON_TOP);
+	Wx::Image::AddHandler(new Wx::JPEGHandler());
+	my $topsizer = new Wx::BoxSizer(wxVERTICAL);
+	my $mwindow = new Wx::HtmlWindow($self, -1,					
+					wxDefaultPosition,
+					[200+(80*$big),100+(80*$big)]);
+	my $btnok = new Wx::Button($self, -1, t::t("Ok"),wxDefaultPosition,wxDefaultSize,wxNO_BORDER);
+	my $color='#F26D00';
+	$color='#FFFFFF' if ($big==1);
+	$mwindow->AppendToPage("<html><body bgcolor='#00468C' text='$color'>$msg</body></html>");
+	$topsizer->Add($mwindow,0, wxALL | wxEXPAND, 10);
+	EVT_BUTTON( $self, $btnok, \&OnOk);
+	if ($ntype==2) {
+		my $btnauth=new Wx::Button($self, -1, t::t("Authorize"),wxDefaultPosition,wxDefaultSize,wxNO_BORDER);
+		$topsizer->Add($btnauth,0, wxALL | wxEXPAND, 10);
+		EVT_BUTTON( $self, $btnauth, \&OnAuth);
+		$self->{_mailToAuth}=$nvalue;
+		$self->{_mailAuth}='';
+	}
+	$topsizer->Add($btnok,0, wxALL | wxEXPAND, 10);
+	$self->SetSizer($topsizer);
+	$topsizer->Fit($self);
+	$topsizer->SetSizeHints($self);
+	return $self;
+}
+
+# Ok event handler
+sub OnOk {
+	my $dialog=shift;
+	$dialog->Destroy();
+}
+
+# auth event handler: launches auth dialog
+sub OnAuth {
+	my $dialog=shift;
+	my $inputDialog = new MRIMInputDialog(t::t('Enter email of the user to authorize:'),$dialog->{_mailToAuth});
+	$inputDialog->ShowModal();
+	$dialog->{_mailAuth}=$inputDialog->getValue();
+	$dialog->Destroy();
+}
+
+# assessor
+sub getMailAuth() {
+	my $dialog=shift;
+	return $dialog->{_mailAuth};
+}
 
 # the search dialog...
 package MRIMSearchDialog;
@@ -210,7 +276,7 @@ sub new {
                                  );
 	my $topsizer = new Wx::BoxSizer(wxVERTICAL);
 	my $nsizer = new Wx::BoxSizer(wxHORIZONTAL);
-	my $nicknamelabel = new Wx::StaticText($self,-1, t::t("Nickname").": ");
+	my $nicknamelabel = new Wx::StaticText($self,-1, t::t("Email").": ");
 	my $enternickname =  new Wx::TextCtrl($self, 3058,
 					"",
 					wxDefaultPosition,
@@ -266,8 +332,8 @@ sub new {
 	EVT_BUTTON( $self, $btncancel, \&OnCancel);
 	EVT_TEXT_ENTER( $self, -1, \&OnSearchUser );
 	$self->SetSizer($topsizer);
-	$self->{_nickname}='';
-	$self->{_nicknamectrl}=$enternickname;
+	$self->{_email}='';
+	$self->{_emailctrl}=$enternickname;
 	$self->{_sex}=0;
 	$self->{_sexctrl}=$choosesex;
 	$self->{_country}='';
@@ -285,7 +351,7 @@ sub new {
 sub OnSearchUser {
 	my $dialog=shift;
 	$dialog->{_cancelled}=0;
-	$dialog->{_nickname}=$dialog->{_nicknamectrl}->GetValue();
+	$dialog->{_email}=$dialog->{_emailctrl}->GetValue();
 	$dialog->{_sex}=$dialog->{_sexctrl}->GetSelection();
 	$dialog->{_country}=$Net::MRIM::Data::COUNTRIES{$dialog->{_countryctrl}->GetValue()};
 	$dialog->{_online}=$dialog->{_onlinectrl}->GetValue();
@@ -299,9 +365,9 @@ sub OnCancel {
 }
 
 # below are assessors
-sub getNickname {
+sub getEmail {
 	my $self=shift;
-	return $self->{_nickname};
+	return $self->{_email};
 }
 
 sub getSex {
@@ -316,7 +382,7 @@ sub getCountry {
 
 sub getOnline {
 	my $self=shift;
-	return $self->{_online};
+	return ($self->{_online}||0);
 }
 
 sub getCancelled {
@@ -437,6 +503,7 @@ sub new {
 	init_msg_text($self);
 	$self->{_cwindow}->SetDefaultStyle(Wx::TextAttr->new(wxBLUE));
 	$self->{_cwindow_color}=1;
+	$self->{has_focus}=1;
 	$topsizer->Fit($self);
 	$topsizer->SetSizeHints($self);
 	$self->Centre(wxBOTH);
@@ -494,8 +561,8 @@ sub mrim_conn {
 				$ret=$mrim->authorize_user($1);
 			}
 			elsif ($command =~ m/^search\s(.*)/) {
-				my ($nickname,$sex,$country,$online)=split(/\|/,$1);
-				$ret=$mrim->search_user($nickname,$sex,$country,$online);
+				my ($email,$sex,$country,$online)=split(/\|/,$1);
+				$ret=$mrim->search_user($email,$sex,$country,$online);
 			}
 		}
 		@dataout=();
@@ -503,15 +570,17 @@ sub mrim_conn {
 		# here we process messages we received from server, if any
 		if ($ret->is_message()) {
 			my $from=$ret->get_from();
-			if ($from ne 'ANKETA') {
-				$from=~s/\@(mail.ru|inbox.ru|list.ru|bk.ru)//;
-				if ($from ne 'OFFLINE') {
-					push @datain, my_local_time()." ".$from." > ".$ret->get_message()."\n";
-				} else {
-					push @datain, t::t('OFFLINE MESSAGE')."\n".$ret->get_message()."\n";
-				}
+			$from=~s/\@(mail.ru|inbox.ru|list.ru|bk.ru)//;
+			if ($from ne 'OFFLINE') {
+				push @datain, my_local_time()." ".$from." > ".$ret->get_message()."\n";
 				push @datatypein, 'FROM';
 			} else {
+				push @datain, t::t('OFFLINE MESSAGE')."\n".$ret->get_message()."\n";
+				push @datatypein, 'FROMOFF';
+			}	
+			$signal=1;
+		} elsif ($ret->is_server_msg()) {
+			if ($ret->get_subtype() == $ret->{TYPE_SERVER_ANKETA}) {
 				my $ainfo=$ret->get_message();
 				my $anketa='<table border="0" cellpadding="4" cellspacing="0">';
 				my $umail='';
@@ -536,6 +605,20 @@ sub mrim_conn {
 				$anketa.='</table>';
 				push @datain, $anketa;
 				push @datatypein, 'ANKETA';
+			} elsif ($ret->get_subtype() == $ret->{TYPE_SERVER_NOTIFY}) {
+				my $msg=$ret->get_message();
+				$msg=~s/ \| /\n/g;
+				my ($tmaillabel,$umaillabel)=(t::t('Total Mails'),t::t('Unread Mails'));
+				$msg=~s/MESSAGES.TOTAL/$tmaillabel/;
+				$msg=~s/MESSAGES.UNREAD/$umaillabel/;
+				push @datain, "$msg\n";
+				push @datatypein, 'SERVER';
+			} elsif ($ret->get_subtype() == $ret->{TYPE_SERVER_AUTH_REQUEST}) {
+				my $msg=$ret->get_from()."|".$ret->get_message();
+				push @datain, "$msg\n";
+				push @datatypein, 'AUTHREQ';
+			} else {
+				print $ret->get_message()."\n";
 			}
 			$signal=1;
 		} elsif ($ret->is_contact_list()) {
@@ -602,19 +685,23 @@ sub OnThreadEvent {
 		Encode::from_to($data,"cp1251","utf8");
 		if ($datatypein[$i] eq 'ANKETA') {
 			show_info($frame,$data);
+		} elsif ($datatypein[$i] eq 'SERVER') {
+			show_notify($frame,"<pre><font size='+1'><b>$data</b></font></pre>",0);
+		} elsif ($datatypein[$i] eq 'FROMOFF') {
+			show_notify($frame,"<pre><font size='-1'>$data</font></pre>",1);
+		} elsif ($datatypein[$i] eq 'AUTHREQ') {
+			$data=~m/^(.*)\|(.*)/;
+			show_notify($frame,"<b>$1 :</b><br>$2",2,$1);
 		} else {
 			if ($datatypein[$i] eq 'TO') {
 				$frame->{_cwindow}->SetDefaultStyle(Wx::TextAttr->new(wxRED)) if ($frame->{_cwindow_color} == 1);
 				$frame->{_cwindow_color} = 2;
 				append_msg_text($frame,$data);
 			} else {
-				if ($data=~m/^OFFLINE/) {
-					show_info($frame,'<pre>'.$data.'</pre>');
-				} else {
-					$frame->{_cwindow}->SetDefaultStyle(Wx::TextAttr->new(wxBLUE)) if ($frame->{_cwindow_color} == 2);
-					$frame->{_cwindow_color} = 1;
-					append_msg_text($frame,$data);
-				}
+				$frame->{_cwindow}->SetDefaultStyle(Wx::TextAttr->new(wxBLUE)) if ($frame->{_cwindow_color} == 2);
+				$frame->{_cwindow_color} = 1;
+				append_msg_text($frame,$data);
+				$frame->RequestUserAttention() if (($NOTIFY==1)||(($Wx::VERSION>0.80)&&($frame->IsActive())));
 			}
 		}
 	}
@@ -744,7 +831,7 @@ sub OnSearchUser {
 	my $searchDialog = new MRIMSearchDialog();
 	$searchDialog->ShowModal();
 	if ($searchDialog->getCancelled()==0) {
-		my $str="search ".$searchDialog->getNickname().'|'.$searchDialog->getSex().'|'.$searchDialog->getCountry().'|'.$searchDialog->getOnline();
+		my $str="search ".$searchDialog->getEmail().'|'.$searchDialog->getSex().'|'.$searchDialog->getCountry().'|'.$searchDialog->getOnline();
 		push @dataout,$str;
 	}
 }
@@ -754,7 +841,8 @@ sub OnAbout {
 	my $frame=shift;
 	show_info($frame,"<pre>PerlMRIM v$VERSION\n"
 	."Copyright 2007-2008 Alexandre Aufrere &lt;aau\@cpan.org&gt;\n"
-	."Protocol (c) Mail.Ru http://agent.mail.ru</pre>");
+	."Protocol (c) Mail.Ru http://agent.mail.ru\n"
+	."Running on wxPerl $Wx::VERSION</pre>");
 }
 
 # check for updates !
@@ -816,6 +904,19 @@ sub show_info {
 	my ($frame,$msg)=@_;
 	my $msgbox=new MRIMInfoDialog($msg);
 	$msgbox->Show();
+}
+
+sub show_notify {
+	my ($frame,$msg,$ntype,$nvalue)=@_;
+	my $msgbox=new MRIMNotifyDialog($msg,$ntype,$nvalue);
+	if ($ntype != 2) {
+		$msgbox->Show();
+	} else {
+		$msgbox->ShowModal();
+		if ($msgbox->getMailAuth() ne '') {
+			push @dataout,"auth ".$msgbox->getMailAuth();
+		}
+	}
 }
 
 sub my_local_time {

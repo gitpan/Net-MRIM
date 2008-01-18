@@ -1,5 +1,5 @@
 #
-# $Date: 2008-01-14 00:33:38 $
+# $Date: 2008-01-18 22:50:17 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -15,13 +15,17 @@ use constant {
  TYPE_UNKNOWN	=> 0,
  TYPE_MSG		=> 1,
  TYPE_LOGOUT_FROM_SRV	=> 2,
- TYPE_CONTACT_LIST	=> 3
- };
+ TYPE_CONTACT_LIST	=> 3,
+ TYPE_SERVER	=> 4
+};
 
 sub new {
 	my ($pkgname)=@_;
 	my $self={}; 
 	$self->{_type}=TYPE_UNKNOWN;
+	$self->{TYPE_SERVER_NOTIFY}=0;
+	$self->{TYPE_SERVER_ANKETA}=1;
+	$self->{TYPE_SERVER_AUTH_REQUEST}=2;
 	bless $self;
 	return $self;
 }
@@ -64,6 +68,26 @@ sub is_logout_from_server {
 	return ($self->{_type}==TYPE_LOGOUT_FROM_SRV);
 }
 
+sub set_server_msg {
+	my ($self,$stype,$to,$message,$svalue)=@_;
+	$self->{_type}=TYPE_SERVER;
+	$self->{_stype}=$stype;
+	$self->{_from}='SERVER';
+	$self->{_to}=$to;
+	$self->{_message}=$message;
+	$self->{_from}=$svalue if ($stype==$self->{TYPE_SERVER_AUTH_REQUEST});
+}
+
+sub is_server_msg {
+	my ($self)=@_;
+	return ($self->{_type}==TYPE_SERVER);
+}
+
+sub get_subtype {
+	my ($self)=@_;
+	return $self->{_stype};
+}
+
 sub set_contact_list {
 	my ($self, $groups, $contacts)=@_;
 	$self->{_type}=TYPE_CONTACT_LIST;
@@ -88,7 +112,7 @@ sub get_contacts {
 
 package Net::MRIM;
 
-our $VERSION='1.03';
+our $VERSION='1.04';
 
 =pod
 
@@ -141,7 +165,7 @@ Get information for a contact:
  
 Search for users:
 
- $ret=$mrim->search_user(nickname, sex, country, online);
+ $ret=$mrim->search_user(email, sex, country, online);
 
 Where sex=(1|2), country can be found at http://agent.mail.ru/region.txt and online=(0|1)
 
@@ -149,6 +173,8 @@ Analyze the return of the message:
 
  if ($ret->is_message()) {
 	print "From: ".$ret->get_from()." Message: ".$ret->get_message()." \n";
+ } elsif ($ret->is_server_msg()) {
+ 	print $ret->get_message()." \n";
  }
 
 Looping to get messages:
@@ -209,6 +235,7 @@ use constant {
  MRIM_CS_AUTHORIZE_ACK	=> 0x1021,	# C -> S, LPS user
 
  MRIM_CS_MESSAGE 		=> 0x1008,	## C->S, UL flags, LPS to, LPS message, LPS rtf-message
+  MESSAGE_FLAG_OFFLINE	=> 0x00000001,
   MESSAGE_FLAG_NORECV	=> 0x00000004,
   MESSAGE_FLAG_AUTHORIZE	=> 0x00000008,
   MESSAGE_FLAG_SYSTEM	=> 0x00000040,
@@ -227,7 +254,7 @@ use constant {
 
  MRIM_CS_CONTACT_LIST2	=> 0x1037, # S->C UL status, UL grp_nb, LPS grp_mask, LPS contacts_mask, grps, contacts
 
- MRIMUA => "Net::MRIM.pm v. "
+ MRIMUA => "Net::MRIM.pm v. $VERSION"
 };
 
 use bytes;
@@ -383,10 +410,13 @@ sub get_contact_avatar_url {
 
 # search users. for now only by nickname, sex, country
 sub search_user {
-	my ($self, $nickname, $sex, $country, $online)=@_;
+	my ($self, $email, $sex, $country, $online)=@_;
+	$email=~m/^([a-z0-9\_\-\.]+)\@([a-z0-9\_\-\.]+)$/i;
+	my $cuser=$1;
+	my $cdomain=$2;
 	my $data='';
-	$data.=pack("V",0x00000002)._to_lps("$nickname") if ($nickname ne '');
-	$data.=pack("V",0x00000005)._to_lps("$sex") if ($sex ne '');
+	$data.=pack("V",0x00000000)._to_lps($cuser).pack("V",0x00000001)._to_lps($cdomain) if ($email ne '');
+	$data.=pack("V",0x00000005)._to_lps("$sex") if (($sex ne '')&&($sex ne '0'));
 	$data.=pack("V",0x0000000F)._to_lps("$country") if ($country ne '');
 	$data.=pack("V",0x00000009)._to_lps('1') if ($online == 1);
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_WP_REQUEST,$data));
@@ -488,15 +518,21 @@ sub _analyze_received_data {
 		my @datas=_from_mrim_us("uuss",$datarcv);
 		# below is a work-around: it seems that sometimes message_flag is left to 0...
 		# as well, it seems the flags can be combined...
-		if ($datas[1]==MESSAGE_FLAG_NORECV) {
+		if (($datas[1]==MESSAGE_FLAG_NORECV)||($datas[1]==MESSAGE_FLAG_OFFLINE)) {
 			$data->set_message($datas[2],$self->{_login},"".$datas[3]);
 		} elsif (($datas[1]==0)||($datas[1]==MESSAGE_FLAG_RTF)) {
 			$data->set_message($datas[2],$self->{_login},"".$datas[3]);
 			$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_MESSAGE_RECV,_to_lps($datas[2]).pack("V",$datas[0])));
-		} elsif (($datas[1]==MESSAGE_FLAG_AUTHORIZE)||($datas[1]==(MESSAGE_FLAG_AUTHORIZE+MESSAGE_FLAG_NORECV))) {
-			$data->set_message($datas[2],$self->{_login},'REQUEST AUTHORIZATION: '.$datas[3]);
-		} elsif (($datas[1]==MESSAGE_FLAG_SYSTEM)||($datas[1]==(MESSAGE_FLAG_SYSTEM+MESSAGE_FLAG_NORECV))) {
-			$data->set_message('SERVER',$self->{_login},$datas[3]);
+		} elsif (($datas[1]==MESSAGE_FLAG_AUTHORIZE)
+			||($datas[1]==(MESSAGE_FLAG_AUTHORIZE+MESSAGE_FLAG_NORECV))
+			||($datas[1]==(MESSAGE_FLAG_AUTHORIZE+MESSAGE_FLAG_OFFLINE))
+			) {
+			$data->set_server_msg($data->{TYPE_SERVER_AUTH_REQUEST},$self->{_login},$datas[3],$datas[2]);
+		} elsif (($datas[1]==MESSAGE_FLAG_SYSTEM)
+			||($datas[1]==(MESSAGE_FLAG_SYSTEM+MESSAGE_FLAG_NORECV))
+			||($datas[1]==(MESSAGE_FLAG_SYSTEM+MESSAGE_FLAG_OFFLINE))
+			) {
+			$data->set_server_msg($data->{TYPE_SERVER_NOTIFY},$self->{_login},$datas[3]);
 		} else {
 			print "DEBUG: ack msg $datas[1] from $datas[2] text: $datas[3]\n" if ($self->{_debug});
 		}
@@ -547,7 +583,8 @@ sub _analyze_received_data {
 		if ($msgrcv==MRIM_CS_USER_STATUS) {
 			@datas=_from_mrim_us("us",$datarcv);
 		} else {
-			@datas=_from_mrim_us("s",$datarcv);
+			my @tmp=_from_mrim_us("s",$datarcv);
+			@datas=(STATUS_ONLINE,$tmp[0]);
 		}
 		my $contacts=$self->{_contacts};
 		my $all_contacts=$self->{_all_contacts};
@@ -555,7 +592,7 @@ sub _analyze_received_data {
 		my @ckeys=keys%{$contacts};
 		my $i=scalar(keys(%{$all_contacts}))+1;
 		$i=20 if ($i<10);
-		if (($msgrcv==MRIM_CS_AUTHORIZE_ACK)||(($datas[0] != STATUS_OFFLINE)&&($datas[0] != STATUS_UNDETERMINED))) {
+		if (($datas[0] != STATUS_OFFLINE)&&($datas[0] != STATUS_UNDETERMINED)) {
 			$contacts->{$datas[1]}=$datas[1];
 			$all_contacts->{$datas[1]}=$i;
 		} elsif (($datas[0] == STATUS_OFFLINE)&&(grep(/$datas[1]/,@ckeys))) {
@@ -611,10 +648,10 @@ sub _analyze_received_data {
 			$fulldata.="----------------------------------------\n" if ($found==1);
 		}
 		print "DEBUG anketa_info: $fulldata\n" if ($self->{_debug});
-		$data->set_message('ANKETA',$self->{_login},$fulldata);
+		$data->set_server_msg($data->{TYPE_SERVER_ANKETA},$self->{_login},$fulldata);
 	} elsif ($msgrcv==MRIM_CS_USER_INFO) {
 		my @datas=_from_mrim_us("ssss",$datarcv);
-		$data->set_message('SERVER',$self->{_login},"$datas[0]: $datas[1] | $datas[2]: $datas[3]");
+		$data->set_server_msg($data->{TYPE_SERVER_NOTIFY},$self->{_login},"$datas[0]: $datas[1] | $datas[2]: $datas[3]");
 	} else {
 		$data->set_message("DEBUG",$self->{_login},$datarcv) if ($self->{_debug});
 	}

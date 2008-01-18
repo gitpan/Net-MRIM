@@ -159,7 +159,7 @@ sub mrim_conn {
 		@dataout=();
 		#sleep(1);
 		$ret=$mrim->ping() if (!defined($ret));
-		if ($ret->is_message()) {
+		if (($ret->is_message())||($ret->is_server_msg())) {
 			$data.=my_local_time()." ".$ret->get_from()." > ".$ret->get_message()."\n";
 			flush_data();
 		} elsif ($ret->is_contact_list()) {

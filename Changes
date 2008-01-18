@@ -1,3 +1,5 @@
+1.04 2008-01-18 improved notification handling (especially AUTH REQUEST)
+
 1.03 2008-01-14 several bugfixes, and handling of some more messages
 
 1.02 2008-01-11 improving search user feature, and handling of some types of messages
