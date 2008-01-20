@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 
 #
-# $Date: 2008-01-18 22:50:17 $
+# $Date: 2008-01-20 18:27:03 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -31,6 +31,10 @@ my $PASSWORD="xxx";
 my $VERSION='0.7';
 my @TRNS=('0');
 my $TLANG='';
+
+my @datain : shared = ();
+my @datatypein : shared = ();
+my @dataout : shared = ();
 
 # the login dialog...
 package MRIMLoginDialog;
@@ -250,13 +254,11 @@ sub OnAuth {
 	my $inputDialog = new MRIMInputDialog(t::t('Enter email of the user to authorize:'),$dialog->{_mailToAuth});
 	$inputDialog->ShowModal();
 	$dialog->{_mailAuth}=$inputDialog->getValue();
+	# this is ugly...
+	if ($dialog->{_mailAuth} ne '') {
+		push @dataout,"auth ".$dialog->{_mailAuth};
+	}
 	$dialog->Destroy();
-}
-
-# assessor
-sub getMailAuth() {
-	my $dialog=shift;
-	return $dialog->{_mailAuth};
 }
 
 # the search dialog...
@@ -405,9 +407,6 @@ my $DONE_EVENT : shared = Wx::NewEventType;
 my $LOGOUT_EVENT : shared = Wx::NewEventType;
 
 my $result : shared = 0;
-my @datain : shared = ();
-my @datatypein : shared = ();
-my @dataout : shared = ();
 my @clistkeys : shared = ();
 my @clistitems : shared = ();
 my @onlinekeys : shared = ();
@@ -611,6 +610,7 @@ sub mrim_conn {
 				my ($tmaillabel,$umaillabel)=(t::t('Total Mails'),t::t('Unread Mails'));
 				$msg=~s/MESSAGES.TOTAL/$tmaillabel/;
 				$msg=~s/MESSAGES.UNREAD/$umaillabel/;
+				$msg=~s/NEW_MAIL/$umaillabel/;
 				push @datain, "$msg\n";
 				push @datatypein, 'SERVER';
 			} elsif ($ret->get_subtype() == $ret->{TYPE_SERVER_AUTH_REQUEST}) {
@@ -647,7 +647,7 @@ sub mrim_conn {
 			$signal=1;
 		} elsif ($ret->is_logout_from_server()) {
 			# send logout event to main app
-			@dataout=(t::t("Logged out from server.\nMaybe you connected from another location?"));
+			@dataout=(t::t("Logged out from server.\nMaybe you connected from another location.\nReconnect?"));
 			my $threvent = new Wx::PlThreadEvent( -1, $LOGOUT_EVENT, $result );
 			Wx::PostEvent( $handler, $threvent );
 			return 1;
@@ -701,7 +701,7 @@ sub OnThreadEvent {
 				$frame->{_cwindow}->SetDefaultStyle(Wx::TextAttr->new(wxBLUE)) if ($frame->{_cwindow_color} == 2);
 				$frame->{_cwindow_color} = 1;
 				append_msg_text($frame,$data);
-				$frame->RequestUserAttention() if (($NOTIFY==1)||(($Wx::VERSION>0.80)&&($frame->IsActive())));
+				$frame->RequestUserAttention() if (($NOTIFY==1)||(($Wx::VERSION>0.80)&&(!$frame->IsActive())));
 			}
 		}
 	}
@@ -758,8 +758,14 @@ sub OnThreadEvent {
 # a logout event has been launched by the MRIM connection thread
 sub OnLogoutEvent {
 	my( $frame, $event ) = @_;
-	show_error($frame,"".$dataout[0]);
-	exit;
+	my $rec=show_error($frame,"".$dataout[0],1);
+	if ($rec==wxID_YES) {
+		# now restart the thread that connects to MRIM
+		my $thr = threads->create(\&mrim_conn,$frame);
+		$frame->{_conn}=$thr;
+	} else {
+		exit;
+	}
 }
 
 # an item has been selected in the contact list
@@ -894,10 +900,12 @@ sub append_msg_text {
 }
 
 sub show_error {
-	my ($frame,$msg)=@_;
-	my $msgbox=Wx::MessageDialog->new($frame,$msg,"Error",wxICON_ERROR);
+	my ($frame,$msg,$yesno)=@_;
+	my $flag=wxICON_ERROR;
+	$flag=$flag|wxYES_NO|wxYES_DEFAULT if ($yesno==1);
+	my $msgbox=Wx::MessageDialog->new($frame,$msg,"Error",$flag);
 	$msgbox->Centre(wxBOTH);
-	$msgbox->ShowModal();
+	return $msgbox->ShowModal();
 }
 
 sub show_info {
@@ -909,14 +917,7 @@ sub show_info {
 sub show_notify {
 	my ($frame,$msg,$ntype,$nvalue)=@_;
 	my $msgbox=new MRIMNotifyDialog($msg,$ntype,$nvalue);
-	if ($ntype != 2) {
-		$msgbox->Show();
-	} else {
-		$msgbox->ShowModal();
-		if ($msgbox->getMailAuth() ne '') {
-			push @dataout,"auth ".$msgbox->getMailAuth();
-		}
-	}
+	$msgbox->Show();
 }
 
 sub my_local_time {

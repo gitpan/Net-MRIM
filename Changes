@@ -1,3 +1,5 @@
+1.05 2008-01-20 added new mail notification support
+
 1.04 2008-01-18 improved notification handling (especially AUTH REQUEST)
 
 1.03 2008-01-14 several bugfixes, and handling of some more messages

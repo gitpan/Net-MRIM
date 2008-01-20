@@ -1,5 +1,5 @@
 #
-# $Date: 2008-01-18 22:50:17 $
+# $Date: 2008-01-20 18:30:32 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -112,7 +112,7 @@ sub get_contacts {
 
 package Net::MRIM;
 
-our $VERSION='1.04';
+our $VERSION='1.05';
 
 =pod
 
@@ -167,7 +167,7 @@ Search for users:
 
  $ret=$mrim->search_user(email, sex, country, online);
 
-Where sex=(1|2), country can be found at http://agent.mail.ru/region.txt and online=(0|1)
+Where sex=(1|2), country can be found at http://agent.mail.ru/region.txt or in Net::MRIM::Data.pm, and online=(0|1)
 
 Analyze the return of the message:
 
@@ -249,12 +249,12 @@ use constant {
 
  MRIM_CS_CONNECTION_PARAMS =>0x1014, # S->C 
  
- MRIM_CS_ANKETA_INFO =>0x1028, # S->C
- MRIM_CS_WP_REQUEST =>0x1029, # C->S
-
+ MRIM_CS_ANKETA_INFO	=>0x1028, # S->C
+ MRIM_CS_WP_REQUEST		=>0x1029, # C->S
+ MRIM_CS_MAILBOX_STATUS	=> 0x1033,
  MRIM_CS_CONTACT_LIST2	=> 0x1037, # S->C UL status, UL grp_nb, LPS grp_mask, LPS contacts_mask, grps, contacts
 
- MRIMUA => "Net::MRIM.pm v. $VERSION"
+ MRIMUA => "Net::MRIM.pm v. "
 };
 
 use bytes;
@@ -538,6 +538,9 @@ sub _analyze_received_data {
 		}
 	} elsif ($msgrcv==MRIM_CS_LOGOUT) {
 		$data->set_logout_from_server();
+	} elsif ($msgrcv==MRIM_CS_MAILBOX_STATUS) {
+		my @datas=_from_mrim_us("u",$datarcv);
+		$data->set_server_msg($data->{TYPE_SERVER_NOTIFY},$self->{_login},"NEW_MAIL: ".$datas[0]);
 	} elsif ($msgrcv==MRIM_CS_CONTACT_LIST2) {
 		# S->C UL status, UL grp_nb, LPS grp_mask, LPS contacts_mask, grps, contacts
 		my @datas=_from_mrim_us("uuss",$datarcv);
