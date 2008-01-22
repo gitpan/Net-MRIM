@@ -1,5 +1,5 @@
 #
-# $Date: 2008-01-20 18:30:32 $
+# $Date: 2008-01-22 21:45:21 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -110,9 +110,43 @@ sub get_contacts {
 	return $self->{_contacts};
 }
 
+package Net::MRIM::Contact;
+
+sub new {
+	my ($pkgname,$email,$name,$status)=@_;
+	my $self={};
+	$self->{_email}=$email;
+	$self->{_name}=$name;
+	$self->{_status}=$status;
+	$self->{STATUS_ONLINE}=0x00000001;
+	$self->{STATUS_AWAY}=0x00000002;
+	bless $self;
+	return $self;
+}
+
+sub get_email {
+	my $self=shift;
+	return $self->{_email};
+}
+
+sub get_name {
+	my $self=shift;
+	return $self->{_name};
+}
+
+sub get_status {
+	my $self=shift;
+	return $self->{_status};
+}
+
+sub set_status {
+	my ($self,$status)=@_;
+	$self->{_status}=$status;
+}
+
 package Net::MRIM;
 
-our $VERSION='1.05';
+our $VERSION='1.06';
 
 =pod
 
@@ -158,6 +192,12 @@ To remove a user from contact list:
 To send a message:
 
  $ret=$mrim->send_message("friend\@mail.ru","hello");
+
+To change user status:
+
+ $ret=$mrim->change_status(status);
+
+Where status=0 means online and status=1 means away
 
 Get information for a contact:
 
@@ -248,11 +288,25 @@ use constant {
  MRIM_CS_DELETE_OFFLINE_MESSAGE	=> 0x101E, #C->S UIDL
 
  MRIM_CS_CONNECTION_PARAMS =>0x1014, # S->C 
- 
- MRIM_CS_ANKETA_INFO	=>0x1028, # S->C
+
+ MRIM_CS_CHANGE_STATUS	=> 0x1022,
+ MRIM_CS_GET_MPOP_SESSION	=> 0x1024,
+ MRIM_CS_MPOP_SESSION	=> 0x1025,
+
+ MRIM_CS_ANKETA_INFO	=> 0x1028, # S->C
  MRIM_CS_WP_REQUEST		=>0x1029, # C->S
  MRIM_CS_MAILBOX_STATUS	=> 0x1033,
  MRIM_CS_CONTACT_LIST2	=> 0x1037, # S->C UL status, UL grp_nb, LPS grp_mask, LPS contacts_mask, grps, contacts
+
+ MRIM_CS_SMS		=> 0x1039, # C->S UL unkown, LPS number, LPS message
+ MRIM_CS_SMS_ACK	=> 0x1040, # S->C UL status
+
+ # Don't look for file transfer, it's simply not handled
+ # Mail.Ru only partially documented the old, unused P2P file transfer
+ # the new file transfer simply gives an (unusable) RFC1918 address
+ # when getting the MRIM_CS_FILE_TRANSFER packet
+ # Needs some reverse-engineering. Has been done by Miranda's MRA plugin guys,
+ # but for some reason i can't find the source
 
  MRIMUA => "Net::MRIM.pm v. "
 };
@@ -283,6 +337,8 @@ sub new {
 	$self->{_debug}=$params{Debug} if (($params{Debug})&&($params{Debug}==1));
 	$self->{_freq}=$params{PollFrequency} || 5;
 	$self->{_freq}=10 if ($self->{_freq}>10);
+	$self->{_last_seq}=-1;
+	$self->{_last_type}=-1;
 	print "DEBUG Poll Frequency: ".$self->{_freq}."\n" if ($self->{_debug});
 	bless $self;
 	return $self;
@@ -340,11 +396,33 @@ sub send_message {
 	return _analyze_received_data($self,$msgrcv,$datarcv,$dlen);
 }
 
+# send SMS
+sub send_sms {
+	my ($self,$numberto,$message)=@_;
+	print "DEBUG [send SMS]: $message\n" if ($self->{_debug});
+	my $data=pack("V",0)._to_lps($numberto)._to_lps($message);
+	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_SMS,$data));
+	$self->{_seq_real}++;
+	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
+	return _analyze_received_data($self,$msgrcv,$datarcv,$dlen);
+}
+
 # to authorize a user to add us to the contact list
 sub authorize_user {
 	my ($self,$user)=@_;
 	my $data=_to_lps($user);
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_AUTHORIZE,$data));
+	$self->{_seq_real}++;	
+	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
+	return _analyze_received_data($self,$msgrcv,$datarcv,$dlen);	
+}
+
+# change user's status: 0=online, 1=away
+sub change_status {
+	my ($self,$status)=@_;
+	my $data=pack('V',STATUS_ONLINE);
+	$data=pack('V',STATUS_AWAY) if ($status==1);
+	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_CHANGE_STATUS,$data));
 	$self->{_seq_real}++;	
 	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
 	return _analyze_received_data($self,$msgrcv,$datarcv,$dlen);	
@@ -437,6 +515,8 @@ sub disconnect {
 sub _make_mrim_packet {
 	my ($self,$msg, $data) = @_;
 	my ($magic, $proto, $seq, $from, $fromport) = (CS_MAGIC, PROTO_VERSION, $self->{_seq_real}, 0, 0);
+	# actually, i'm not even sure this is needed...
+	$seq=$self->{_last_seq} if ($msg==MRIM_CS_MESSAGE_RECV);
 	my $dlen = 0;
 	$dlen = length($data) if $data;
 	my $mrim_packet = pack("V7", $magic, $proto, $seq, $msg, $dlen, $from, $fromport);
@@ -468,7 +548,7 @@ sub _receive_data {
 	my $data="";
 	my $typ=0;
 	print "DEBUG [recv packet]: waiting for header data\n" if ($self->{_debug});
-	return (MRIM_CS_LOGOUT,"") if (!($self->{_sock}));
+	return (MRIM_CS_LOGOUT,"",0) if (!($self->{_sock}));
 	my $s = IO::Select->new();
 	$s->add($self->{_sock});
 	my $dllen=0;
@@ -478,6 +558,12 @@ sub _receive_data {
 		$self->{_sock}->recv($buffer,44);
 		my ($magic, $proto, $seq, $msg, $dlen, $from, $fromport, $r1, $r2, $r3, $r4) = unpack ("V11", $buffer);
 		use bytes;
+		if (($seq>0)&&($seq<=$self->{_last_seq})&&($msg==$self->{_last_type})) {
+			return(-1,"",0);
+		} else {
+			$self->{_last_type}=$msg;
+			$self->{_last_seq}=$seq if ($seq>0);
+		}
 		$self->{_sock}->recv($buffer,$dlen);
 		$data=$buffer;
 		$typ=$msg;
@@ -487,7 +573,7 @@ sub _receive_data {
 			$self->{_sock}->recv($buffer,$dlen-length($data));
 			$data.=$buffer;
 		}
-		printf("DEBUG [recv packet]: MAGIC=$magic, PROTO=$proto, SEQ=$seq, TYP=0x%04x, LEN=$dlen ".length($data)."\n",$msg) if ($self->{_debug});
+		printf("DEBUG [recv packet]: MAGIC=$magic, PROTO=$proto, SEQ=$seq, LASTSEQ=$self->{_last_seq}, TYP=0x%04x, LEN=$dlen ".length($data)."\n",$msg) if ($self->{_debug});
 	}
 	return ($typ,$data,$dllen);	
 }
@@ -568,8 +654,7 @@ sub _analyze_received_data {
 			$name=~s/\n//g;
 			print "DEBUG: Found contact $name of id $email flags $flags $sflags $status $group unknown: $unk clen $clen dlen $dlen\n" if ($self->{_debug});
 			$name=$email if (length($name)<1);
-			# TODO: create a MRIM::Contact object, and implement the CList as a list of MRIM::Contact
-			$contacts->{$email}=$name if (($status != STATUS_OFFLINE)&&($status != STATUS_UNDETERMINED)&&(length($email)>1));
+			$contacts->{$email}=new Net::MRIM::Contact($email,$name,$status) if (($status != STATUS_OFFLINE)&&($status != STATUS_UNDETERMINED)&&(length($email)>1));
 			$all_contacts->{$email}=$i;
 			$clen=16+length($name)+length($email)+length($unk)+$clen;
 			$datarcv="" if($clen>$dlen);
@@ -596,7 +681,7 @@ sub _analyze_received_data {
 		my $i=scalar(keys(%{$all_contacts}))+1;
 		$i=20 if ($i<10);
 		if (($datas[0] != STATUS_OFFLINE)&&($datas[0] != STATUS_UNDETERMINED)) {
-			$contacts->{$datas[1]}=$datas[1];
+			$contacts->{$datas[1]}=new Net::MRIM::Contact($datas[1],$datas[1],$datas[0]);
 			$all_contacts->{$datas[1]}=$i;
 		} elsif (($datas[0] == STATUS_OFFLINE)&&(grep(/$datas[1]/,@ckeys))) {
 			$contacts->{$datas[1]}=undef;
@@ -616,11 +701,11 @@ sub _analyze_received_data {
 		for (my $i=0; $i<$datas[1]; $i++) { $dataparse.='ss'; }
 		my $fulldata="INFO\n";
 		my $fentr=0;
+		print "DEBUG anketa_info: found ".$datas[0].' '.$datas[1].' '.$datas[2].' '.$datas[3]." entries\n" if ($self->{_debug});
 		while ($fentr<$datas[2]) {
 			@datas=_from_mrim_us("uuuu".$dataparse,$datarcv);
 			# this flag will trace if a record was found
 			my $found=1;
-			print "DEBUG anketa_info: found ".$datas[0].' '.$datas[1].' '.$datas[2].' '.$datas[3]." entries\n" if ($self->{_debug});
 			for (my $i=4;$i<($datas[1]+4);$i++) {
 				my $label=$datas[$i];
 				my $value=$datas[($i+$datas[1])];
@@ -655,6 +740,11 @@ sub _analyze_received_data {
 	} elsif ($msgrcv==MRIM_CS_USER_INFO) {
 		my @datas=_from_mrim_us("ssss",$datarcv);
 		$data->set_server_msg($data->{TYPE_SERVER_NOTIFY},$self->{_login},"$datas[0]: $datas[1] | $datas[2]: $datas[3]");
+	} elsif ($msgrcv==MRIM_CS_SMS_ACK) {
+		my @datas=_from_mrim_us("u",$datarcv);
+		# actually, MRIM seems to return always "1"... so i leave the outpout only for debug
+		# IMHO, their protocl has been updated, and nobody knows how. some reverse-engineering ahead.
+		$data->set_message("DEBUG",$self->{_login},"SMS ACK: $datas[0]") if ($self->{_debug});
 	} else {
 		$data->set_message("DEBUG",$self->{_login},$datarcv) if ($self->{_debug});
 	}

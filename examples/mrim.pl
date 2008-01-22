@@ -170,10 +170,10 @@ sub mrim_conn {
 	                foreach $clitem (keys(%{$clist})) {
 				if (defined($clist->{$clitem})) {
 		                        push @nclistkeys,$clitem;
-		                        push @nclistitems,$clist->{$clitem};
+		                        push @nclistitems,$clist->{$clitem}->get_name();
 					if(_is_in_list($clitem,@clistkeys)==0) {
 						push @clistkeys,$clitem;
-						push @clistitems, $clist->{$clitem};
+						push @clistitems, $clist->{$clitem}->get_name();
 						#$data.="adding $clitem ". $clist->{$clitem}." to CL ".scalar(@clistkeys)." ".scalar( @clistitems)."\n";
 					}
 				}

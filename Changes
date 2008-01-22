@@ -1,3 +1,5 @@
+1.06 2008-01-23 added support for statuses (own and contacts), added Net::MRIM::Contact module, and some bugfixes
+
 1.05 2008-01-20 added new mail notification support
 
 1.04 2008-01-18 improved notification handling (especially AUTH REQUEST)

@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 
 #
-# $Date: 2008-01-20 18:27:03 $
+# $Date: 2008-01-22 21:48:58 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -28,7 +28,7 @@ my $NOTIFY=1;
 ##                     ##
 my $LOGIN="xxx";
 my $PASSWORD="xxx";
-my $VERSION='0.7';
+my $VERSION='0.8';
 my @TRNS=('0');
 my $TLANG='';
 
@@ -118,7 +118,15 @@ sub new {
 					wxDefaultPosition,
 					[500,300]);
 	my $btnok = new Wx::Button($self, -1, t::t("Ok"));
-	$mwindow->AppendToPage("<html><body>$msg</body></html>");
+	eval {
+		$mwindow->AppendToPage("<html><body>$msg</body></html>");
+	};
+	if ($@){
+		my $msgbox=Wx::MessageDialog->new($self,"Error while displaying info.","Error",wxICON_ERROR);
+		$msgbox->Centre(wxBOTH);
+		$msgbox->ShowModal();
+		return 0;
+	}
 	$topsizer->Add($mwindow,0, wxALL | wxEXPAND, 10);
 	$topsizer->Add($btnok,0, wxALL | wxEXPAND, 10);
 	EVT_BUTTON( $self, $btnok, \&OnOk);
@@ -398,7 +406,7 @@ use utf8;
 use threads;
 use threads::shared;
 # import the event registration function
-use Wx::Event qw(EVT_COMMAND EVT_IDLE EVT_CLOSE EVT_TEXT_ENTER EVT_LISTBOX EVT_BUTTON EVT_MENU);
+use Wx::Event qw(EVT_COMMAND EVT_IDLE EVT_CLOSE EVT_TEXT_ENTER EVT_LISTBOX EVT_BUTTON EVT_MENU EVT_IDLE EVT_TEXT EVT_CHILD_FOCUS EVT_SET_FOCUS);
 use Wx qw(:everything);
 use Net::MRIM;
 use Encode;
@@ -487,7 +495,13 @@ sub new {
 	EVT_CLOSE( $self, \&OnQuit);
 	EVT_MENU( $self, 3506, \&OnCheckUpdate);
 	EVT_MENU( $self, 3507, \&OnAbout);
+	EVT_IDLE($self,\&OnIdle);
+	EVT_TEXT($self,-1,\&OnActive);
+	EVT_CHILD_FOCUS($self,\&OnActive);
+	EVT_SET_FOCUS($self,\&OnActive);
+	EVT_SET_FOCUS($entertext,\&OnActive);
 
+	$self->{idle_time}=new Wx::Timer();
 	# here begins the real stuff
 	# first, open the login box, and wait for user input
 	my $loginDialog = new MRIMLoginDialog();
@@ -563,6 +577,13 @@ sub mrim_conn {
 				my ($email,$sex,$country,$online)=split(/\|/,$1);
 				$ret=$mrim->search_user($email,$sex,$country,$online);
 			}
+			elsif ($command =~ m/^(online|away)/) {
+				if ($1 eq "online") {
+					$ret=$mrim->change_status(0);
+				} else {
+					$ret=$mrim->change_status(1);
+				}
+			}			
 		}
 		@dataout=();
 		$ret=$mrim->ping() if (!defined($ret));
@@ -626,13 +647,13 @@ sub mrim_conn {
 	                my $clitem;
 			my @nclistkeys=();
 			my @nclistitems=();
-	                foreach $clitem (keys(%{$clist})) {
+			foreach $clitem (keys(%{$clist})) {
 				if (defined($clist->{$clitem})) {
-		                        push @nclistkeys,$clitem;
-		                        push @nclistitems,$clist->{$clitem};
+						push @nclistkeys,$clitem;
+						push @nclistitems,$clist->{$clitem};
 					if(_is_in_list($clitem,@clistkeys)==0) {
 						push @clistkeys,$clitem;
-						push @clistitems, $clist->{$clitem};
+						push @clistitems, $clist->{$clitem}->get_name().'||'.$clist->{$clitem}->get_status();
 					}
 				}
 			}
@@ -661,6 +682,35 @@ sub mrim_conn {
 }
 
 # below are event handlers
+
+# this is triggered when it should: when the user doesn't do anything on the computer
+# it triggers the "away" status after 5 minutes
+sub OnIdle {
+	my $self=shift;
+	$self->{idle_timer}=new Wx::Timer() if ($self->{idle_timer}==undef);
+	if (!$self->{idle_timer}->IsRunning()) {
+		$self->{idle_timer}->Start(300*1000,1);
+		if ($self->{status} eq 'online') {
+			$self->{status}='away';
+			push @dataout,'away';
+		}
+	}
+}
+
+# this should work, except that it's not triggered when it should....
+# should be triggered every time the user moves the mouse or types a key
+sub OnActive {
+	my $self=shift;
+	if ($self->{status} ne 'online') {
+		$self->{idle_timer}=new Wx::Timer() if ($self->{idle_timer}==undef);
+		if ($self->{idle_timer}->IsRunning()) {
+			$self->{idle_timer}->Stop();
+			$self->{idle_timer}->Start(300*1000,1);
+		}
+		$self->{status}='online';
+		push @dataout,'online';
+	}
+}
 
 # text has been entered in the input test field
 sub OnTextEnter {
@@ -728,13 +778,17 @@ sub OnThreadEvent {
 		@onlineids=();
 		for (my $i=0; $i<scalar(@clistkeys); $i++) {
 			my $clitem=$clistkeys[$i];
-			my $cllabel=$clistitems[$i];
+			my @cllabell=split(/\|\|/,$clistitems[$i]);
+			my $cllabel='';
+			my $caway=(($cllabell[1]==1)?'':'*');
 			if ($DISPLAY_NICK==0) {
 				$cllabel=$clitem;
 			} else {
+				$cllabel=$cllabell[0];
 				Encode::from_to($cllabel,"cp1251","utf8");
 			}
 			$cllabel=~s/^(.*)\@[a-z\.]+$/$1/i;
+			$cllabel.=$caway;
 			if ($clitem ne 'x') {
 				push @onlinekeys, "".$cllabel." ";
 				push @onlinemails, "".$clitem;
@@ -911,7 +965,7 @@ sub show_error {
 sub show_info {
 	my ($frame,$msg)=@_;
 	my $msgbox=new MRIMInfoDialog($msg);
-	$msgbox->Show();
+	$msgbox->Show() if ($msgbox!=0);
 }
 
 sub show_notify {
