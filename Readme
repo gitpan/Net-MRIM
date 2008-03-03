@@ -14,6 +14,8 @@ This wasn't that easy, since the protocol was designed with x86 in mind.
 
 It should work on any standard PERL with version > 5.8.
 
+For mrimwx.pl you also need WxPerl >0.7
+
 Everything in this package is licensed under the terms of the GPLv2.
 
 USE AT YOUR OWN RISK. THERE IS NO WARRANTY WHATSOEVER.

@@ -10,4 +10,6 @@ examples/answeringmachine.pl
 examples/mrim.pl
 examples/mrimwx.pl
 examples/country_list.pl
+examples/throbber.gif
+examples/throbbers.gif
 META.yml                                 Module meta-data (added by MakeMaker)

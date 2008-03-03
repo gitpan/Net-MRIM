@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 
 #
-# $Date: 2008-01-22 21:48:58 $
+# $Date: 2008-03-03 23:26:15 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -19,16 +19,22 @@ use strict;
 my $LAST_HISTORY_LINES=50;
 # Display nickname (1) or username (0) in contact list
 my $DISPLAY_NICK=0;
+# Number of minutes of inactivity before going away
+# Note that inactivity is relative to PerlMRIM and not to your workstation
+my $MIN_AWAY=10;
 # before wxPerl version 0.8, notification isn't really nice, so you can deactivate here below
 # after version 0.80 it just works, and cannot be disabled.
 my $NOTIFY=1;
+# activate SMS menu
+# note that i don't think SMS sending through MRIM works, that's why it's deactivated by default
+my $SHOWSMSMENU=0;
 
 ##                     ##
 ## DO NOT MODIFY BELOW ##
 ##                     ##
 my $LOGIN="xxx";
 my $PASSWORD="xxx";
-my $VERSION='0.8';
+my $VERSION='0.9';
 my @TRNS=('0');
 my $TLANG='';
 
@@ -121,6 +127,7 @@ sub new {
 	eval {
 		$mwindow->AppendToPage("<html><body>$msg</body></html>");
 	};
+	#this is an attempt to catch some errors when displaying info (as html)
 	if ($@){
 		my $msgbox=Wx::MessageDialog->new($self,"Error while displaying info.","Error",wxICON_ERROR);
 		$msgbox->Centre(wxBOTH);
@@ -200,6 +207,81 @@ sub OnCancel {
 sub getValue {
 	my $self=shift;
 	return $self->{_value};
+}
+
+# the SMS send dialog...
+package MRIMSMSDialog;
+use Wx qw(:everything);
+use Wx::Event qw(EVT_CLOSE EVT_BUTTON EVT_TEXT_ENTER);
+use base 'Wx::Dialog';
+
+sub new {
+	my ($class)=@_;
+	my $self=$class->SUPER::new( undef,
+                                 -1,
+                                 'PerlMRIM::SMS',
+                                 [-1, -1],        # default position
+                                 [300, 200],      # size
+                                 );
+	my $topsizer = new Wx::BoxSizer(wxVERTICAL);
+	my $msglabel = new Wx::StaticText($self,-1, "Enter telephone number and SMS message to send.");
+	my $mwindow = new Wx::TextCtrl($self, -1,
+					"+",
+					wxDefaultPosition,
+					wxDefaultSize, 
+					wxTE_PROCESS_ENTER
+					);
+	my $msgctrl = new Wx::TextCtrl($self, -1,
+					"",
+					wxDefaultPosition,
+					wxDefaultSize, 
+					wxTE_PROCESS_ENTER
+					);
+	my $bsizer = new Wx::BoxSizer(wxHORIZONTAL);
+	my $btnok = new Wx::Button($self, -1, t::t("Ok"));
+	my $btncancel = new Wx::Button($self, -1, t::t("Cancel"));
+	$bsizer->Add($btncancel,0, wxALL | wxEXPAND, 10);	
+	$bsizer->Add($btnok,0, wxALL | wxEXPAND, 10);	
+	$topsizer->Add($msglabel,0, wxALL | wxEXPAND, 10);
+	$topsizer->Add($mwindow,0, wxALL | wxEXPAND, 10);
+	$topsizer->Add($msgctrl,0, wxALL | wxEXPAND, 10);
+	$topsizer->Add($bsizer,0, wxALL | wxEXPAND, 10);
+	EVT_BUTTON( $self, $btnok, \&OnOk);
+	EVT_BUTTON( $self, $btncancel, \&OnCancel);
+	EVT_TEXT_ENTER( $self, -1, \&OnOk);
+	$self->SetSizer($topsizer);
+	$topsizer->Fit($self);
+	$topsizer->SetSizeHints($self);
+	$self->Centre(wxBOTH);
+	$self->{_value}='';
+	$self->{_valuectrl}=$mwindow;
+	$self->{_msg}='';
+	$self->{_msgctrl}=$msgctrl;
+	return $self;
+}
+
+sub OnOk {
+	my $dialog=shift;
+	$dialog->{_value}=$dialog->{_valuectrl}->GetValue();
+	$dialog->{_msg}=$dialog->{_msgctrl}->GetValue();
+	$dialog->Destroy();
+}
+
+# cancel button event handler
+sub OnCancel {
+	my $dialog=shift;
+	$dialog->{_value}='';
+	$dialog->Destroy();
+}
+
+sub getTelephone() {
+	my $self=shift;
+	return $self->{_value};
+}
+
+sub getMessage() {
+	my $self=shift;
+	return $self->{_msg};
 }
 
 # the info dialog...
@@ -406,7 +488,7 @@ use utf8;
 use threads;
 use threads::shared;
 # import the event registration function
-use Wx::Event qw(EVT_COMMAND EVT_IDLE EVT_CLOSE EVT_TEXT_ENTER EVT_LISTBOX EVT_BUTTON EVT_MENU EVT_IDLE EVT_TEXT EVT_CHILD_FOCUS EVT_SET_FOCUS);
+use Wx::Event qw(EVT_COMMAND EVT_IDLE EVT_CLOSE EVT_TEXT_ENTER EVT_COMMAND_LEFT_CLICK EVT_LIST_ITEM_SELECTED EVT_LIST_ITEM_RIGHT_CLICK EVT_BUTTON EVT_MENU EVT_IDLE EVT_TEXT EVT_CHILD_FOCUS EVT_SET_FOCUS);
 use Wx qw(:everything);
 use Net::MRIM;
 use Encode;
@@ -430,13 +512,19 @@ sub new {
                                  [-1, -1],		# default position
                                  [600, 300],	# size
                                  wxMINIMIZE_BOX | wxSYSTEM_MENU | wxCAPTION | wxCLOSE_BOX | wxCLIP_CHILDREN);
+	$self->SetBackgroundColour(new Wx::Colour(212,212,238));
 	my $topsizer = new Wx::BoxSizer(wxVERTICAL);
 	my $upsizer = new Wx::BoxSizer(wxHORIZONTAL);
 	my $btnsizer = new Wx::BoxSizer(wxHORIZONTAL);
-	my $clist = new Wx::ListBox($self, 3456,
+	my $clist = new Wx::ListCtrl($self, 3456,
 					wxDefaultPosition,
-					wxDefaultSize
+					[130,300],
+					wxLC_REPORT|wxLC_SINGLE_SEL|wxLC_NO_HEADER
 					);
+	# this label isn't displayed
+	$clist->InsertColumn(0,'Contacts');
+	# width for macosx. it's less on other systems
+	$clist->SetColumnWidth(0,120);
 	my $cwindow = new Wx::TextCtrl($self, 3457,
 					"",
 					wxDefaultPosition,
@@ -449,18 +537,18 @@ sub new {
 					wxDefaultSize,
 					wxTE_PROCESS_ENTER
 					);
-	my $btninfo = new Wx::Button($self, 3460, t::t("Info"));
-	my $btnadd = new Wx::Button($self, 3461, t::t("Add User"));
-	my $btndel = new Wx::Button($self, 3462, t::t("Remove"));
-	my $btnauth = new Wx::Button($self, 3463, t::t("Authorize"));
+	my $waithtml = new Wx::HtmlWindow($self, -1,
+					wxDefaultPosition,
+					[20,20], wxHW_SCROLLBAR_NEVER);
+	$waithtml->SetBorders(0);
 	my $status = new Wx::StaticText($self, 3465, t::t("Logging in..."));
+	my $mrimstatus = new Wx::StaticText($self, 3466, '');
 	$upsizer->Add($clist,0,wxEXPAND | wxALL, 10);
 	$upsizer->Add($cwindow,0,wxEXPAND | wxALL, 10);
-	$btnsizer->Add($btninfo,0,wxEXPAND | wxALL, 10);
-	$btnsizer->Add($btnadd,0,wxEXPAND | wxALL, 10);
-	$btnsizer->Add($btndel,0,wxEXPAND | wxALL, 10);
-	$btnsizer->Add($btnauth,0,wxEXPAND | wxALL, 10);
-	$btnsizer->Add($status,0,wxEXPAND | wxALL, 10);
+	$btnsizer->Add($status,0,wxEXPAND | wxALL | wxALIGN_LEFT, 12);
+	$btnsizer->SetItemMinSize($status,480,10);
+	$btnsizer->Add($mrimstatus,0,wxEXPAND | wxALL | wxALIGN_RIGHT, 12);
+	$btnsizer->Add($waithtml,0,wxEXPAND | wxALL | wxALIGN_RIGHT | wxRIGHT | wxLEFT, 10);
 	$topsizer->Add($upsizer,0, wxEXPAND | wxALL);
 	$topsizer->Add($btnsizer,0, wxEXPAND | wxALL);
 	$topsizer->Add($entertext,0, wxALL | wxEXPAND, 10);
@@ -470,31 +558,48 @@ sub new {
 	$self->{_entertext}=$entertext;
 	$self->{_topsizer}=$topsizer;
 	$self->{_status}=$status;
+	$self->{_mrimstatus}=$mrimstatus;
+	$self->{_waithtml}=$waithtml;
+	reset_throbber($self);
 
 	my $actionMenu = new Wx::Menu();
-	$actionMenu->Append(3504,t::t("&Search People..."));
-	$actionMenu->AppendSeparator();	$actionMenu->Append(3505,t::t("&Quit"));
+	$actionMenu->Append(3503,t::t("&Add Contact...")."\tCtrl+A");
+	$actionMenu->Append(3504,t::t("&Search People...")."\tCtrl+S");
+	if ($SHOWSMSMENU==1) {
+		$actionMenu->AppendSeparator();	
+		$actionMenu->Append(3502,t::t("Send S&MS...")."\tCtrl+M");
+	}
+	$actionMenu->AppendSeparator();	
+	$actionMenu->Append(3505,t::t("&Quit")."\tCtrl+Q");
 	my $helpMenu = new Wx::Menu();
-	$helpMenu->Append(3506,t::t("&Check for Updates..."));
-	$helpMenu->Append(3507,t::t("&About..."));
+	$helpMenu->Append(3506,t::t("&Check for Updates...")."\tCtrl+U");
+	$helpMenu->Append(wxID_ABOUT,t::t("&About..."));
 	my $menuBar = new Wx::MenuBar();
 	$menuBar->Append($actionMenu,t::t("&Action"));
 	$menuBar->Append($helpMenu,t::t("&Help"));
 	$self->SetMenuBar($menuBar);
-	
+	my $contactMenu = new Wx::Menu(t::t('Contact Menu'));
+	$contactMenu->Append(3601,t::t("&User Details"));
+	$contactMenu->Append(3602,t::t("&Delete"));
+	$contactMenu->Append(3603,t::t("&Grant Authorization"));
+	$self->{_contact_menu}=$contactMenu;
+
 	EVT_COMMAND( $self, -1, $DONE_EVENT, \&OnThreadEvent );
 	EVT_COMMAND( $self, -1, $LOGOUT_EVENT, \&OnLogoutEvent );
 	EVT_TEXT_ENTER( $self, -1, \&OnTextEnter );
-	EVT_LISTBOX( $self, -1, \&OnListBoxClicked );
-	EVT_BUTTON( $self, $btninfo, \&OnInfo);
-	EVT_BUTTON( $self, $btnadd, \&OnAddUser);
-	EVT_BUTTON( $self, $btndel, \&OnDelUser);
-	EVT_BUTTON( $self, $btnauth, \&OnAuthUser);
+	EVT_COMMAND_LEFT_CLICK( $self, 3456, \&OnListBoxClicked );
+	EVT_LIST_ITEM_SELECTED( $self, 3456, \&OnListBoxClicked );
+	EVT_LIST_ITEM_RIGHT_CLICK( $self, 3456, \&OnListBoxRightClicked );
+	EVT_MENU( $self, 3601, \&OnInfo);
+	EVT_MENU( $self, 3503, \&OnAddUser);
+	EVT_MENU( $self, 3502, \&OnSMS);
+	EVT_MENU( $self, 3602, \&OnDelUser);
+	EVT_MENU( $self, 3603, \&OnAuthUser);
 	EVT_MENU( $self, 3504, \&OnSearchUser);
 	EVT_MENU( $self, 3505, \&OnQuit);
 	EVT_CLOSE( $self, \&OnQuit);
 	EVT_MENU( $self, 3506, \&OnCheckUpdate);
-	EVT_MENU( $self, 3507, \&OnAbout);
+	EVT_MENU( $self, wxID_ABOUT, \&OnAbout);
 	EVT_IDLE($self,\&OnIdle);
 	EVT_TEXT($self,-1,\&OnActive);
 	EVT_CHILD_FOCUS($self,\&OnActive);
@@ -527,7 +632,7 @@ sub new {
 sub mrim_conn {
 	my $handler=shift;
 	my $mrim=Net::MRIM->new(
-			PollFrequency => 10,
+			PollFrequency => 30,
 			Debug => 0
 			);
 	$mrim->hello();
@@ -577,6 +682,10 @@ sub mrim_conn {
 				my ($email,$sex,$country,$online)=split(/\|/,$1);
 				$ret=$mrim->search_user($email,$sex,$country,$online);
 			}
+			elsif ($command =~ m/^sms\s(.*)/) {
+				my ($tel,$msg)=split(/\|\|/,$1);
+				$ret=$mrim->send_sms($tel,$msg);
+			}
 			elsif ($command =~ m/^(online|away)/) {
 				if ($1 eq "online") {
 					$ret=$mrim->change_status(0);
@@ -592,14 +701,17 @@ sub mrim_conn {
 			my $from=$ret->get_from();
 			$from=~s/\@(mail.ru|inbox.ru|list.ru|bk.ru)//;
 			if ($from ne 'OFFLINE') {
+				# regular received message
 				push @datain, my_local_time()." ".$from." > ".$ret->get_message()."\n";
 				push @datatypein, 'FROM';
 			} else {
+				# offline message
 				push @datain, t::t('OFFLINE MESSAGE')."\n".$ret->get_message()."\n";
 				push @datatypein, 'FROMOFF';
 			}	
 			$signal=1;
 		} elsif ($ret->is_server_msg()) {
+			# display user infos (can be received from user search)
 			if ($ret->get_subtype() == $ret->{TYPE_SERVER_ANKETA}) {
 				my $ainfo=$ret->get_message();
 				my $anketa='<table border="0" cellpadding="4" cellspacing="0">';
@@ -623,8 +735,10 @@ sub mrim_conn {
 					}
 				}
 				$anketa.='</table>';
+				$anketa='<pre>'.t::t('Error while retrieving contact information').'</pre>' if ($ainfo !~ m/User/);
 				push @datain, $anketa;
 				push @datatypein, 'ANKETA';
+			# any server notification (mostly mail-related)
 			} elsif ($ret->get_subtype() == $ret->{TYPE_SERVER_NOTIFY}) {
 				my $msg=$ret->get_message();
 				$msg=~s/ \| /\n/g;
@@ -634,6 +748,7 @@ sub mrim_conn {
 				$msg=~s/NEW_MAIL/$umaillabel/;
 				push @datain, "$msg\n";
 				push @datatypein, 'SERVER';
+			# auth request
 			} elsif ($ret->get_subtype() == $ret->{TYPE_SERVER_AUTH_REQUEST}) {
 				my $msg=$ret->get_from()."|".$ret->get_message();
 				push @datain, "$msg\n";
@@ -642,25 +757,28 @@ sub mrim_conn {
 				print $ret->get_message()."\n";
 			}
 			$signal=1;
+		# the contact list
 		} elsif ($ret->is_contact_list()) {
 			my $clist=$ret->get_contacts();
-	                my $clitem;
+			my $clitem;
 			my @nclistkeys=();
 			my @nclistitems=();
 			foreach $clitem (keys(%{$clist})) {
 				if (defined($clist->{$clitem})) {
-						push @nclistkeys,$clitem;
-						push @nclistitems,$clist->{$clitem};
-					if(_is_in_list($clitem,@clistkeys)==0) {
+					push @nclistkeys,$clitem;
+					push @nclistitems,$clist->{$clitem};
+					my $clistindex=_is_in_list($clitem,@clistkeys);
+					if($clistindex==-1) {
 						push @clistkeys,$clitem;
 						push @clistitems, $clist->{$clitem}->get_name().'||'.$clist->{$clitem}->get_status();
-					}
+					} else {
+						$clistitems[$clistindex]=$clist->{$clitem}->get_name().'||'.$clist->{$clitem}->get_status();					}
 				}
 			}
 			my $icl;
 			for ($icl=0;$icl<scalar(@clistkeys);$icl++) {
 				$clitem=$clistkeys[$icl];
-				if (_is_in_list($clitem,@nclistkeys)==0) {
+				if (_is_in_list($clitem,@nclistkeys)==-1) {
 					$clistkeys[$icl]='x';
 				}
 			}
@@ -687,14 +805,17 @@ sub mrim_conn {
 # it triggers the "away" status after 5 minutes
 sub OnIdle {
 	my $self=shift;
-	$self->{idle_timer}=new Wx::Timer() if ($self->{idle_timer}==undef);
-	if (!$self->{idle_timer}->IsRunning()) {
-		$self->{idle_timer}->Start(300*1000,1);
+	if ($self->{idle_timer}==undef) {
+		$self->{idle_timer}=new Wx::StopWatch() ;
+		$self->{idle_timer}->Start(0);
+	}
+	if ($self->{idle_timer}->Time() >= ($MIN_AWAY*60*1000)) {
 		if ($self->{status} eq 'online') {
 			$self->{status}='away';
+			$self->{_mrimstatus}->SetLabel(t::t('Status:').' '.t::t('Away'));
 			push @dataout,'away';
 		}
-	}
+	} 
 }
 
 # this should work, except that it's not triggered when it should....
@@ -702,12 +823,11 @@ sub OnIdle {
 sub OnActive {
 	my $self=shift;
 	if ($self->{status} ne 'online') {
-		$self->{idle_timer}=new Wx::Timer() if ($self->{idle_timer}==undef);
-		if ($self->{idle_timer}->IsRunning()) {
-			$self->{idle_timer}->Stop();
-			$self->{idle_timer}->Start(300*1000,1);
+		if ($self->{idle_timer}!=undef) {
+			$self->{idle_timer}->Start(0);
 		}
 		$self->{status}='online';
+		$self->{_mrimstatus}->SetLabel(t::t('Status:').' '.t::t('Online')) if ($self->{_mrimstatus}!=undef);
 		push @dataout,'online';
 	}
 }
@@ -717,10 +837,10 @@ sub OnTextEnter {
 	my $frame=shift;
 	my $input=$frame->{_entertext}->GetValue();
 	$input=Encode::encode("cp1251",$input);
-	my @indexes=$frame->{_clist}->GetSelections();
-	if (scalar(@indexes)>0) {
+	my $index=$frame->{_clist}->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);
+	if ($index>-1) {
 		$frame->{_entertext}->Clear();
-		push @dataout, 's'.$onlineids[$indexes[0]].' '.$input;
+		push @dataout, 's'.$onlineids[$index].' '.$input;
 		$frame->{_status}->SetLabel(t::t("Sending..."));
 	} else {
 		show_error($frame,t::t("No contact selected !"));
@@ -734,11 +854,14 @@ sub OnThreadEvent {
 		my $data=$datain[$i];		
 		Encode::from_to($data,"cp1251","utf8");
 		if ($datatypein[$i] eq 'ANKETA') {
+			reset_throbber($frame);
 			show_info($frame,$data);
 		} elsif ($datatypein[$i] eq 'SERVER') {
 			show_notify($frame,"<pre><font size='+1'><b>$data</b></font></pre>",0);
 		} elsif ($datatypein[$i] eq 'FROMOFF') {
-			show_notify($frame,"<pre><font size='-1'>$data</font></pre>",1);
+			# offline message
+			$data=~s/\n/\<br\>/g;
+			show_notify($frame,"<font size='-1'>$data</font>",1);
 		} elsif ($datatypein[$i] eq 'AUTHREQ') {
 			$data=~m/^(.*)\|(.*)/;
 			show_notify($frame,"<b>$1 :</b><br>$2",2,$1);
@@ -768,19 +891,20 @@ sub OnThreadEvent {
 		my $selectedindex=-1;
 		my $j=0;
 		# memorize selected contact, if any
-		my @indexes=$frame->{_clist}->GetSelections();
-		if (scalar(@indexes)>0) {
-			$selecteditem=$onlinemails[$indexes[0]];
+		my $index=$frame->{_clist}->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);;
+		if ($index>-1) {
+			$selecteditem=$onlinemails[$index];
 		}
 		# flush and update contact list
 		@onlinekeys=();
 		@onlinemails=();
 		@onlineids=();
+		$frame->{_clist}->DeleteAllItems();
 		for (my $i=0; $i<scalar(@clistkeys); $i++) {
 			my $clitem=$clistkeys[$i];
 			my @cllabell=split(/\|\|/,$clistitems[$i]);
 			my $cllabel='';
-			my $caway=(($cllabell[1]==1)?'':'*');
+			my $caway=(($cllabell[1]==1)?0:1);
 			if ($DISPLAY_NICK==0) {
 				$cllabel=$clitem;
 			} else {
@@ -788,19 +912,23 @@ sub OnThreadEvent {
 				Encode::from_to($cllabel,"cp1251","utf8");
 			}
 			$cllabel=~s/^(.*)\@[a-z\.]+$/$1/i;
-			$cllabel.=$caway;
 			if ($clitem ne 'x') {
 				push @onlinekeys, "".$cllabel." ";
 				push @onlinemails, "".$clitem;
 				push @onlineids, "".($i+1);
 				$selectedindex=$j if ($selecteditem eq $clitem);
+				$frame->{_clist}->InsertStringItem($j,$cllabel);
+				if ($caway==0) {
+					$frame->{_clist}->SetItemTextColour($j,new Wx::Colour('FOREST GREEN'));
+				} else {
+					$frame->{_clist}->SetItemTextColour($j,new Wx::Colour('GOLD'));
+				}
 				$j++;
 			}
 		}
-		$frame->{_clist}->Set(\@onlinekeys);
 		# restore selected contact, if any
 		if ($selectedindex>-1) {	
-			$frame->{_clist}->SetSelection($selectedindex);
+			$frame->{_clist}->SetItemState($selectedindex,wxLIST_STATE_SELECTED,wxLIST_STATE_SELECTED);
 			$frame->{_status}->SetLabel(t::t("Send to").": ".$selecteditem);
 		}
 		$frame->{_topsizer}->Fit($frame);
@@ -812,6 +940,7 @@ sub OnThreadEvent {
 # a logout event has been launched by the MRIM connection thread
 sub OnLogoutEvent {
 	my( $frame, $event ) = @_;
+	$frame->RequestUserAttention() if (($NOTIFY==1)||(($Wx::VERSION>0.80)&&(!$frame->IsActive())));
 	my $rec=show_error($frame,"".$dataout[0],1);
 	if ($rec==wxID_YES) {
 		# now restart the thread that connects to MRIM
@@ -825,11 +954,20 @@ sub OnLogoutEvent {
 # an item has been selected in the contact list
 sub OnListBoxClicked {
 	my $frame=shift;
-	my @indexes=$frame->{_clist}->GetSelections();
-	if (scalar(@indexes)>0) {
-		$frame->{_status}->SetLabel(t::t("Send to").": ".$onlinemails[$indexes[0]]);
+	my $index=$frame->{_clist}->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);
+	if ($index>-1) {
+		$frame->{_status}->SetLabel(t::t("Send to").": ".$onlinemails[$index]);
 	}
 	$frame->{_entertext}->SetFocus();
+}
+
+# an item has been right clicked in the contact list
+sub OnListBoxRightClicked {
+	my $frame=shift;
+	my $index=$frame->{_clist}->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);
+	if ($index>-1) {
+		$frame->{_clist}->PopupMenu($frame->{_contact_menu},wxDefaultPosition);
+	}
 }
 
 # a close event has been sent by the interface
@@ -844,9 +982,10 @@ sub OnQuit {
 # an info request event has been sent by the interface
 sub OnInfo {
 	my $frame=shift;
-	my @indexes=$frame->{_clist}->GetSelections();
-	if (scalar(@indexes)>0) {
-		push @dataout, "i".$onlineids[$indexes[0]];
+	my $index=$frame->{_clist}->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);
+	if ($index>-1) {
+		push @dataout, "i".$onlineids[$index];
+		set_throbber($frame);
 	} else {
 		show_error($frame,t::t("No contact selected !"));
 	}	
@@ -885,6 +1024,18 @@ sub OnAuthUser {
 	} 
 }
 
+# send a SMS dialog...
+sub OnSMS {
+	my $frame=shift;
+	my $inputDialog = new MRIMSMSDialog();
+	$inputDialog->ShowModal();
+	my $tel=$inputDialog->getTelephone();
+	my $msg=$inputDialog->getMessage();
+	if ($tel =~ m/\d/) {
+		push @dataout,"sms ".$tel.'||'.$msg;
+	} 
+}
+
 # open search window...
 sub OnSearchUser {
 	my $frame=shift;
@@ -893,6 +1044,7 @@ sub OnSearchUser {
 	if ($searchDialog->getCancelled()==0) {
 		my $str="search ".$searchDialog->getEmail().'|'.$searchDialog->getSex().'|'.$searchDialog->getCountry().'|'.$searchDialog->getOnline();
 		push @dataout,$str;
+		set_throbber($frame);
 	}
 }
 
@@ -921,11 +1073,21 @@ sub OnCheckUpdate {
 
 # below are utility methods
 
+sub set_throbber {
+	my $frame=shift;
+	$frame->{_waithtml}->SetPage('<html><body><img src="throbber.gif" border="0"></body></html>');
+}
+
+sub reset_throbber {
+	my $frame=shift;
+	$frame->{_waithtml}->SetPage('<html><body><img src="throbbers.gif" border="0"></body></html>');
+}
+
 sub selected_contact {
 	my $frame=shift;
-	my @indexes=$frame->{_clist}->GetSelections();
-	if (scalar(@indexes)>0) {
-		return ''.$onlinemails[$indexes[0]];
+	my $index=$frame->{_clist}->GetNextItem(-1,wxLIST_NEXT_ALL,wxLIST_STATE_SELECTED);
+	if ($index>-1) {
+		return ''.$onlinemails[$index];
 	}
 	return '';
 }
@@ -981,10 +1143,12 @@ sub my_local_time {
 
 sub _is_in_list {
 	my ($item,@list)=@_;
+	my $index=0;
 	foreach (@list) {
-		return 1 if ($_ eq $item);
+		return $index if ($_ eq $item);
+		$index++;
 	}
-	return 0;
+	return -1;
 } 
 
 # now all the rest: the Wx::App override, and the main part.

@@ -1,3 +1,5 @@
+1.07 2008-03-04 fixed avatar link and improved overall responsiveness
+
 1.06 2008-01-23 added support for statuses (own and contacts), added Net::MRIM::Contact module, and some bugfixes
 
 1.05 2008-01-20 added new mail notification support

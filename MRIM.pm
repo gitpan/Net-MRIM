@@ -1,5 +1,5 @@
 #
-# $Date: 2008-01-22 21:45:21 $
+# $Date: 2008-03-03 23:48:25 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -146,7 +146,7 @@ sub set_status {
 
 package Net::MRIM;
 
-our $VERSION='1.06';
+our $VERSION='1.07';
 
 =pod
 
@@ -336,9 +336,10 @@ sub new {
 	$self->{_all_contacts}={};
 	$self->{_debug}=$params{Debug} if (($params{Debug})&&($params{Debug}==1));
 	$self->{_freq}=$params{PollFrequency} || 5;
-	$self->{_freq}=10 if ($self->{_freq}>10);
+	$self->{_freq}=30 if ($self->{_freq}>30);
 	$self->{_last_seq}=-1;
 	$self->{_last_type}=-1;
+	$self->{_last_time}=time();
 	print "DEBUG Poll Frequency: ".$self->{_freq}."\n" if ($self->{_debug});
 	bless $self;
 	return $self;
@@ -366,8 +367,12 @@ sub get_ping_period {
 sub ping {	
 	my ($self)=@_;
 	print "DEBUG [ping]\n" if ($self->{_debug});
-	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_PING,""),0);	
-	$self->{_seq_real}++;
+	my $curtime=time();
+	if (($curtime-$self->{_last_time})>=($self->{_ping_period}-5)) {
+		$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_PING,""),0);	
+		$self->{_seq_real}++;
+		$self->{_last_time}=$curtime;
+	}
 	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
 	return _analyze_received_data($self,$msgrcv,$datarcv,$dlen);
 }
@@ -470,7 +475,8 @@ sub contact_info {
 	$email=~m/^([a-z0-9\_\-\.]+)\@([a-z0-9\_\-\.]+)$/i;
 	my $cuser=$1;
 	my $cdomain=$2;
-	my $data=pack("V",0x00000000)._to_lps($cuser).pack("V",0x00000001)._to_lps($cdomain);
+	my $data=pack("V",0x00000000)._to_lps($cuser).pack("V",0x00000001)._to_lps($cdomain).pack("V",0x00000009)._to_lps('1');
+	print "DEBUG Getting infor for $cuser $cdomain\n" if ($self->{_debug});
 	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_WP_REQUEST,$data));
 	$self->{_seq_real}++;
 	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
@@ -480,10 +486,10 @@ sub contact_info {
 # get contact avatar url
 sub get_contact_avatar_url {
 	my ($self, $email)=@_;
-	$email=~m/^([a-z0-9\_\-\.]+)\@([a-z0-9\_\-\.]+)$/i;
+	$email=~m/^([a-z0-9\_\-\.]+)\@([a-z0-9\_\-]+)\.([a-z0-9\_\-]+)$/i;
 	my $cuser=$1;
 	my $cdomain=$2;
-	return "http://avt.foto.mail.ru/mail/$cuser/_avatar";	
+	return "http://avt.foto.mail.ru/$cdomain/$cuser/_avatar";	
 }
 
 # search users. for now only by nickname, sex, country
@@ -548,9 +554,11 @@ sub _receive_data {
 	my $data="";
 	my $typ=0;
 	print "DEBUG [recv packet]: waiting for header data\n" if ($self->{_debug});
-	return (MRIM_CS_LOGOUT,"",0) if (!($self->{_sock}));
+	return (MRIM_CS_LOGOUT,"",0) if ((!($self->{_sock}))||(!$self->{_sock}->connected()));
 	my $s = IO::Select->new();
 	$s->add($self->{_sock});
+	# check, since socket registration *could* fail
+	return (MRIM_CS_LOGOUT,"",0) if ($s->exists($self->{_sock})==undef);
 	my $dllen=0;
 	# this stuff is to not wait for ever data from the server
 	# note that we're mixing a bit unbuffered and buffered I/O, this is not 100% great	
@@ -559,7 +567,8 @@ sub _receive_data {
 		my ($magic, $proto, $seq, $msg, $dlen, $from, $fromport, $r1, $r2, $r3, $r4) = unpack ("V11", $buffer);
 		use bytes;
 		if (($seq>0)&&($seq<=$self->{_last_seq})&&($msg==$self->{_last_type})) {
-			return(-1,"",0);
+			# this should work, but it doesn't. since i don't understand, better leave it deactivated.
+			#return(-1,"",0);
 		} else {
 			$self->{_last_type}=$msg;
 			$self->{_last_seq}=$seq if ($seq>0);
@@ -702,7 +711,7 @@ sub _analyze_received_data {
 		my $fulldata="INFO\n";
 		my $fentr=0;
 		print "DEBUG anketa_info: found ".$datas[0].' '.$datas[1].' '.$datas[2].' '.$datas[3]." entries\n" if ($self->{_debug});
-		while ($fentr<$datas[2]) {
+		while (($fentr<$datas[2])&&($fentr<50)) {
 			@datas=_from_mrim_us("uuuu".$dataparse,$datarcv);
 			# this flag will trace if a record was found
 			my $found=1;
