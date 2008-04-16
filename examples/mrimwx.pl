@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 
 #
-# $Date: 2008-03-03 23:26:15 $
+# $Date: 2008-03-04 22:50:56 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -48,6 +48,8 @@ use Wx qw(:everything);
 use Wx::Event qw(EVT_CLOSE EVT_BUTTON EVT_TEXT_ENTER);
 use base 'Wx::Dialog';
 
+my @networks=('@mail.ru','@inbox.ru','@bk.ru','@list.ru');
+
 sub new {
 	my $class=shift;
 	my $self=$class->SUPER::new( undef,
@@ -64,17 +66,23 @@ sub new {
 					wxDefaultPosition,
 					wxDefaultSize
 					);
+	my $choosedomain = new Wx::Choice($self, 3159,
+					wxDefaultPosition,
+					wxDefaultSize,
+					\@networks
+					);
 	my $psizer = new Wx::BoxSizer(wxHORIZONTAL);
 	my $pwdlabel = new Wx::StaticText($self,-1, t::t("Password").": ");
-	my $enterpwd =  new Wx::TextCtrl($self, 3159,
+	my $enterpwd =  new Wx::TextCtrl($self, 3160,
 					"",
 					wxDefaultPosition,
 					wxDefaultSize,
 					wxTE_PASSWORD|wxTE_PROCESS_ENTER
 					);
-	my $btnlogin = new Wx::Button($self, 3160, t::t("Connect"));
+	my $btnlogin = new Wx::Button($self, 3161, t::t("Connect"));
 	$lsizer->Add($loginlabel,0, wxALL | wxEXPAND, 10);
 	$lsizer->Add($enterlogin,0, wxALL | wxEXPAND, 10);
+	$lsizer->Add($choosedomain,0, wxALL | wxEXPAND, 10);
 	$psizer->Add($pwdlabel,0, wxALL | wxEXPAND, 10);
 	$psizer->Add($enterpwd,0, wxALL | wxEXPAND, 10);	
 	$topsizer->Add($lsizer,0, wxALL | wxEXPAND, 10);
@@ -85,6 +93,7 @@ sub new {
 	EVT_CLOSE( $self, \&OnQuit);
 	$self->SetSizer($topsizer);
 	$self->{_login}=$enterlogin;
+	$self->{_cdomain}=$choosedomain;
 	$self->{_pwd}=$enterpwd;
 	$topsizer->Fit($self);
 	$topsizer->SetSizeHints($self);
@@ -94,7 +103,7 @@ sub new {
 
 sub OnConnectUser {
 	my $dialog=shift;
-	$LOGIN=$dialog->{_login}->GetValue();
+	$LOGIN=$dialog->{_login}->GetValue().$networks[$dialog->{_cdomain}->GetCurrentSelection()];
 	$PASSWORD=$dialog->{_pwd}->GetValue();
 	$dialog->Destroy();
 }

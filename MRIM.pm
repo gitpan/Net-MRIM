@@ -1,5 +1,5 @@
 #
-# $Date: 2008-03-03 23:48:25 $
+# $Date: 2008-04-16 21:14:13 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -146,7 +146,7 @@ sub set_status {
 
 package Net::MRIM;
 
-our $VERSION='1.07';
+our $VERSION='1.08';
 
 =pod
 
@@ -281,6 +281,7 @@ use constant {
   MESSAGE_FLAG_SYSTEM	=> 0x00000040,
   MESSAGE_FLAG_RTF		=> 0x00000080,
   MESSAGE_FLAG_NOTIFY	=> 0x00000400,
+  MESSAGE_FLAG_UNKOWN   => 0x00200000,
  MRIM_CS_MESSAGE_RECV	=> 0x1011,
  MRIM_CS_MESSAGE_STATUS	=> 0x1012, # S->C
  MRIM_CS_MESSAGE_ACK			=> 0x1009, #S->C
@@ -368,7 +369,7 @@ sub ping {
 	my ($self)=@_;
 	print "DEBUG [ping]\n" if ($self->{_debug});
 	my $curtime=time();
-	if (($curtime-$self->{_last_time})>=($self->{_ping_period}-5)) {
+	if (($curtime-$self->{_last_time})>=($self->{_ping_period}-10)) {
 		$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_PING,""),0);	
 		$self->{_seq_real}++;
 		$self->{_last_time}=$curtime;
@@ -387,6 +388,12 @@ sub login {
 	$self->{_seq_real}++;
 	$self->{_login}=$login;
 	my($msgrcv,$datarcv,$dlen)=_receive_data($self);
+	my $norace=0;
+	while (($msgrcv==0)&&($norace<50)) {
+		($msgrcv,$datarcv,$dlen)=_receive_data($self);
+		$norace++;
+	}
+	print "DEBUG [rcv login ack] $msgrcv\n" if ($self->{_debug});
 	return ($msgrcv==MRIM_CS_LOGIN_ACK)?1:0;
 }
 
@@ -558,7 +565,7 @@ sub _receive_data {
 	my $s = IO::Select->new();
 	$s->add($self->{_sock});
 	# check, since socket registration *could* fail
-	return (MRIM_CS_LOGOUT,"",0) if ($s->exists($self->{_sock})==undef);
+	return (MRIM_CS_LOGOUT,"",0) if (!defined($s->exists($self->{_sock})));
 	my $dllen=0;
 	# this stuff is to not wait for ever data from the server
 	# note that we're mixing a bit unbuffered and buffered I/O, this is not 100% great	
@@ -613,9 +620,11 @@ sub _analyze_received_data {
 		my @datas=_from_mrim_us("uuss",$datarcv);
 		# below is a work-around: it seems that sometimes message_flag is left to 0...
 		# as well, it seems the flags can be combined...
+		# lastly, this flag was recently added, i don't know why...
+		$datas[1]=$datas[1] - MESSAGE_FLAG_UNKOWN if ($datas[1]>=MESSAGE_FLAG_UNKOWN);
 		if (($datas[1]==MESSAGE_FLAG_NORECV)||($datas[1]==MESSAGE_FLAG_OFFLINE)) {
 			$data->set_message($datas[2],$self->{_login},"".$datas[3]);
-		} elsif (($datas[1]==0)||($datas[1]==MESSAGE_FLAG_RTF)) {
+		} elsif (($datas[1]==0)||($datas[1]==MESSAGE_FLAG_RTF)||($datas[1]==MESSAGE_FLAG_UNKOWN)||($datas[1]==(MESSAGE_FLAG_RTF+MESSAGE_FLAG_UNKOWN))) {
 			$data->set_message($datas[2],$self->{_login},"".$datas[3]);
 			$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_MESSAGE_RECV,_to_lps($datas[2]).pack("V",$datas[0])));
 		} elsif (($datas[1]==MESSAGE_FLAG_AUTHORIZE)
