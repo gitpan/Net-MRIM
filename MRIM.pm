@@ -1,5 +1,5 @@
 #
-# $Date: 2008-04-16 21:14:13 $
+# $Date: 2008-07-18 18:51:39 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -146,7 +146,7 @@ sub set_status {
 
 package Net::MRIM;
 
-our $VERSION='1.08';
+our $VERSION='1.09';
 
 =pod
 
@@ -281,7 +281,7 @@ use constant {
   MESSAGE_FLAG_SYSTEM	=> 0x00000040,
   MESSAGE_FLAG_RTF		=> 0x00000080,
   MESSAGE_FLAG_NOTIFY	=> 0x00000400,
-  MESSAGE_FLAG_UNKOWN   => 0x00200000,
+  MESSAGE_FLAG_UNKOWN   => 0x00100000,
  MRIM_CS_MESSAGE_RECV	=> 0x1011,
  MRIM_CS_MESSAGE_STATUS	=> 0x1012, # S->C
  MRIM_CS_MESSAGE_ACK			=> 0x1009, #S->C
@@ -617,16 +617,20 @@ sub _analyze_received_data {
 		$data->set_message("OFFLINE",$self->{_login},$msg);
 		$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_DELETE_OFFLINE_MESSAGE,substr($datarcv,0,8)));
 	} elsif ($msgrcv==MRIM_CS_MESSAGE_ACK) {
-		my @datas=_from_mrim_us("uuss",$datarcv);
+		my @datas=_from_mrim_us("uusss",$datarcv);
 		# below is a work-around: it seems that sometimes message_flag is left to 0...
 		# as well, it seems the flags can be combined...
 		# lastly, this flag was recently added, i don't know why...
-		$datas[1]=$datas[1] - MESSAGE_FLAG_UNKOWN if ($datas[1]>=MESSAGE_FLAG_UNKOWN);
+		while ($datas[1]>=MESSAGE_FLAG_UNKOWN) {
+			$datas[1]=$datas[1] - MESSAGE_FLAG_UNKOWN;
+		}
 		if (($datas[1]==MESSAGE_FLAG_NORECV)||($datas[1]==MESSAGE_FLAG_OFFLINE)) {
 			$data->set_message($datas[2],$self->{_login},"".$datas[3]);
-		} elsif (($datas[1]==0)||($datas[1]==MESSAGE_FLAG_RTF)||($datas[1]==MESSAGE_FLAG_UNKOWN)||($datas[1]==(MESSAGE_FLAG_RTF+MESSAGE_FLAG_UNKOWN))) {
+		} elsif (($datas[1]==0)||($datas[1]==MESSAGE_FLAG_RTF)) {
 			$data->set_message($datas[2],$self->{_login},"".$datas[3]);
 			$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_MESSAGE_RECV,_to_lps($datas[2]).pack("V",$datas[0])));
+		} elsif (($datas[1]==MESSAGE_FLAG_NOTIFY)||($datas[1]==(MESSAGE_FLAG_NOTIFY+MESSAGE_FLAG_NORECV))) {
+			$data->set_message($datas[2],$self->{_login},"pishu") if ($self->{_debug});
 		} elsif (($datas[1]==MESSAGE_FLAG_AUTHORIZE)
 			||($datas[1]==(MESSAGE_FLAG_AUTHORIZE+MESSAGE_FLAG_NORECV))
 			||($datas[1]==(MESSAGE_FLAG_AUTHORIZE+MESSAGE_FLAG_OFFLINE))

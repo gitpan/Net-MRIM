@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 
 #
-# $Date: 2008-03-04 22:50:56 $
+# $Date: 2008-04-21 20:24:47 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -34,7 +34,7 @@ my $SHOWSMSMENU=0;
 ##                     ##
 my $LOGIN="xxx";
 my $PASSWORD="xxx";
-my $VERSION='0.9';
+my $VERSION='0.11';
 my @TRNS=('0');
 my $TLANG='';
 
