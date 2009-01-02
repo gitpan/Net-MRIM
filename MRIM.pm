@@ -1,5 +1,5 @@
 #
-# $Date: 2008-07-18 18:51:39 $
+# $Date: 2009-01-02 20:14:31 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -146,7 +146,7 @@ sub set_status {
 
 package Net::MRIM;
 
-our $VERSION='1.09';
+our $VERSION='1.10';
 
 =pod
 
@@ -268,7 +268,9 @@ use constant {
  MRIM_CS_ADD_CONTACT 	=> 0x1019,  # C->S UL flag, UL group_id, LPS email, LPS name
   CONTACT_FLAG_VISIBLE	=> 0x00000008,
   CONTACT_FLAG_REMOVED	=> 0x00000001,
+  CONTACT_FLAG_SMS	=> 0x00100000,
  MRIM_CS_ADD_CONTACT_ACK	=> 0x101A,
+  CONTACT_OPER_SUCCESS	=> 0x00000000,
  MRIM_CS_AUTHORIZE		=> 0x1020,	# C -> S, LPS user
  MRIM_CS_MODIFY_CONTACT		=> 0x101B,	# C -> S, UL id, UL flags, UL group_id, LPS email, LPS name, LPS unused
  MRIM_CS_MODIFY_CONTACT_ACK	=> 0x101C,
@@ -411,11 +413,27 @@ sub send_message {
 # send SMS
 sub send_sms {
 	my ($self,$numberto,$message)=@_;
+	my $data=new Net::MRIM::Message();
 	print "DEBUG [send SMS]: $message\n" if ($self->{_debug});
-	my $data=pack("V",0)._to_lps($numberto)._to_lps($message);
-	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_SMS,$data));
+	# first, we should "add" it as SMS contact...
+	my $data=pack("V",CONTACT_FLAG_SMS).pack("V",0xffffffff)._to_lps($numberto)._to_lps("SMS")._to_lps($numberto);
+	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_ADD_CONTACT,$data));
 	$self->{_seq_real}++;
 	my ($msgrcv,$datarcv,$dlen)=_receive_data($self);
+	my @datas=_from_mrim_us("uu",$datarcv);
+	my $cid=$datas[1];
+	if ($datas[0] != CONTACT_OPER_SUCCESS) {
+		$data->set_server_msg($data->{TYPE_SERVER_NOTIFY},$self->{_login},"CONTACT_OPER_ERROR_SMS: Error adding contact for SMS sending");
+		return $data;
+	}
+	$data=pack("V",0)._to_lps($numberto)._to_lps($message);
+	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_SMS,$data));
+	$self->{_seq_real}++;
+	($msgrcv,$datarcv,$dlen)=_receive_data($self);
+	$data=pack("V",$cid).pack("V",CONTACT_FLAG_SMS|CONTACT_FLAG_REMOVED).pack("V",0xffffffff)._to_lps($numberto)._to_lps("SMS")._to_lps($numberto);
+	$self->{_sock}->send(_make_mrim_packet($self,MRIM_CS_MODIFY_CONTACT,$data));
+	$self->{_seq_real}++;
+	($msgrcv,$datarcv,$dlen)=_receive_data($self);
 	return _analyze_received_data($self,$msgrcv,$datarcv,$dlen);
 }
 
@@ -717,6 +735,7 @@ sub _analyze_received_data {
 		my @datas=_from_mrim_us("uu",$datarcv.pack("V",0));
 		print "DEBUG add_contact_ack: $datas[0] $datas[1]\n" if ($self->{_debug});
 		$data->set_contact_list($self->{_groups},$self->{_contacts});
+		$data->set_server_msg($data->{TYPE_SERVER_NOTIFY},$self->{_login},"CONTACT_OPER_ERROR: Error adding/removing contact") if ($datas[0] != CONTACT_OPER_SUCCESS);
 	} elsif ($msgrcv==MRIM_CS_ANKETA_INFO) {
 		my @datas=_from_mrim_us("uuuu",$datarcv);
 		my $dataparse="";
@@ -765,7 +784,6 @@ sub _analyze_received_data {
 	} elsif ($msgrcv==MRIM_CS_SMS_ACK) {
 		my @datas=_from_mrim_us("u",$datarcv);
 		# actually, MRIM seems to return always "1"... so i leave the outpout only for debug
-		# IMHO, their protocl has been updated, and nobody knows how. some reverse-engineering ahead.
 		$data->set_message("DEBUG",$self->{_login},"SMS ACK: $datas[0]") if ($self->{_debug});
 	} else {
 		$data->set_message("DEBUG",$self->{_login},$datarcv) if ($self->{_debug});

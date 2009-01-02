@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 
 #
-# $Date: 2008-04-21 20:24:47 $
+# $Date: 2009-01-02 20:14:31 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -27,7 +27,7 @@ my $MIN_AWAY=10;
 my $NOTIFY=1;
 # activate SMS menu
 # note that i don't think SMS sending through MRIM works, that's why it's deactivated by default
-my $SHOWSMSMENU=0;
+my $SHOWSMSMENU=1;
 
 ##                     ##
 ## DO NOT MODIFY BELOW ##
