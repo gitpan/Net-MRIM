@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 
 #
-# $Date: 2009-01-02 20:14:31 $
+# $Date: 2009-01-03 13:38:59 $
 #
 # Copyright (c) 2007-2008 Alexandre Aufrere
 # Licensed under the terms of the GPL (see perldoc MRIM.pm)
@@ -34,7 +34,7 @@ my $SHOWSMSMENU=1;
 ##                     ##
 my $LOGIN="xxx";
 my $PASSWORD="xxx";
-my $VERSION='0.11';
+my $VERSION='0.12';
 my @TRNS=('0');
 my $TLANG='';
 
@@ -308,8 +308,8 @@ sub new {
 	my ($x,$y)=(Wx::GetDisplaySize()->GetWidth(),Wx::GetDisplaySize()->GetHeight());
 	my $big=0;
 	$big=1 if ($ntype!=0);
-	$x-=(250+(80*$big));
-	$y-=(250+(80*$big));
+	$x-=(280+(80*$big));
+	$y-=(280+(80*$big));
 	my $self=$class->SUPER::new( undef,
                                  -1,
                                  'PerlMRIM::Notify',
@@ -320,7 +320,7 @@ sub new {
 	my $topsizer = new Wx::BoxSizer(wxVERTICAL);
 	my $mwindow = new Wx::HtmlWindow($self, -1,					
 					wxDefaultPosition,
-					[200+(80*$big),100+(80*$big)]);
+					[230+(80*$big),130+(80*$big)]);
 	my $btnok = new Wx::Button($self, -1, t::t("Ok"),wxDefaultPosition,wxDefaultSize,wxNO_BORDER);
 	my $color='#F26D00';
 	$color='#FFFFFF' if ($big==1);
@@ -755,6 +755,8 @@ sub mrim_conn {
 				$msg=~s/MESSAGES.TOTAL/$tmaillabel/;
 				$msg=~s/MESSAGES.UNREAD/$umaillabel/;
 				$msg=~s/NEW_MAIL/$umaillabel/;
+				$msg=t::t('Error sending SMS') if ($msg=~m/CONTACT_OPER_ERROR_SMS/);
+				$msg=t::t('Error adding contact') if ($msg=~m/CONTACT_OPER_ERROR/);
 				push @datain, "$msg\n";
 				push @datatypein, 'SERVER';
 			# auth request
